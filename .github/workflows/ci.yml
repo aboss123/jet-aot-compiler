@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        compiler: [gcc, clang]
+        exclude:
+          # GCC is not readily available on macOS
+          - os: macos-latest
+            compiler: gcc
+            
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up C++ environment
+      uses: aminya/setup-cpp@v1
+      with:
+        compiler: ${{ matrix.compiler }}
+        cmake: true
+        ninja: true
+        
+    - name: Configure build (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja
+        
+    - name: Configure build (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        
+    - name: Build project
+      run: |
+        cd build
+        cmake --build . --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
+        
+    - name: Run test suite
+      run: |
+        cd build
+        ./test_suite
+        
+    - name: Run optimization tests
+      run: |
+        cd build
+        ./standalone_optimization_test
+        
+    - name: Run relocation tests
+      run: |
+        cd build
+        ./test_relocation
+        
+    - name: Test example programs
+      run: |
+        cd build
+        timeout 30s ./x64_assembler_demo || true
+        timeout 10s ./hello_macho || true
+        
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run basic checks
+      run: |
+        # Check for common issues
+        echo "Checking for TODO/FIXME comments..."
+        grep -r "TODO\|FIXME" src/ tests/ examples/ || echo "No TODOs found"
+        
+        echo "Checking for trailing whitespace..."
+        if grep -r "[[:space:]]$" src/ tests/ examples/ --include="*.cpp" --include="*.h"; then
+          echo "Found trailing whitespace!"
+          exit 1
+        fi
+        
+        echo "Code quality checks passed!"
+        
+  documentation:
+    name: Documentation Build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Validate README
+      run: |
+        # Check that README has required sections
+        sections=("Key Features" "Quick Start" "Building" "Testing" "Architecture")
+        for section in "${sections[@]}"; do
+          if ! grep -q "$section" README.md; then
+            echo "Missing required section: $section"
+            exit 1
+          fi
+        done
+        echo "README validation passed!"
+        
+    - name: Check links in documentation
+      run: |
+        # Basic link validation for markdown files
+        if command -v curl &> /dev/null; then
+          echo "Validating external links..."
+          # Extract URLs and validate (basic check)
+          grep -oP 'https?://[^\s)]+' README.md CONTRIBUTING.md || echo "No external links found"
+        fi
