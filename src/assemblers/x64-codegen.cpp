@@ -356,7 +356,7 @@ MemoryAddress::MemoryAddress(const Register base,
                              has_sib(true) {}
 
 
- // [base + (index * scale) + disp32]
+ /// [base + (index * scale) + disp32]
  MemoryAddress::MemoryAddress(const Register base,
                               const Register index,
                               SibScale scale,
@@ -1896,4 +1896,28 @@ void Assembler::lfence() {
 
 void Assembler::pause() {
   write(0xF3, 0x90);  // PAUSE (F3 90)
+}
+
+void Assembler::movb(const MemoryAddress &dest, Register src) {
+  rex_optional_rm1(src, dest);
+  write(0x88);
+  write_address(dest, src);
+}
+
+void Assembler::movw(const MemoryAddress &dest, Register src) {
+  rex_optional_rm2(src, dest);
+  write(0x89);
+  write_address(dest, src);
+}
+
+void Assembler::movd(const MemoryAddress &dest, Register src) {
+  rex_optional_rm3(src, dest);
+  write(0x89);
+  write_address(dest, src);
+}
+
+void Assembler::movq(const MemoryAddress &dest, Register src) {
+  rex_optional_rm4(src, dest);
+  write(0x89);
+  write_address(dest, src);
 }

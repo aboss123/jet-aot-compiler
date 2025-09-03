@@ -312,6 +312,12 @@ public:
   void movd(const MemoryAddress &dest, Imm32 imm);
   void movq(const MemoryAddress &dest, Imm32 imm); // sign-extended to 64-bit
 
+  // Register to memory store operations
+  void movb(const MemoryAddress &dest, Register src);
+  void movw(const MemoryAddress &dest, Register src);
+  void movd(const MemoryAddress &dest, Register src);
+  void movq(const MemoryAddress &dest, Register src);
+
   void movb(Register dest, Register src);
   void movw(Register dest, Register src);
   void movd(Register dest, Register src);

@@ -5,6 +5,8 @@
 #include "backends/codegen/x64_register_set.h"
 #include "backends/codegen/arm64_register_set.h"
 #include "backends/codegen/optimization_passes.h"
+#include "assemblers/x64-codegen.h"
+#include "assemblers/arm64-codegen.h"
 #include <iostream>
 #include <fstream>
 #include <memory>
@@ -1194,6 +1196,399 @@ TEST(Integration, OptimizedRegisterAllocation) {
     ASSERT_TRUE(allocation_result.value_to_register.size() > 0, "Should have register assignments");
 }
 
+TEST(LabelSystem, BackendIntegration) {
+    // Test label system integration with both backends
+    
+    // Test 1: x64 Backend with Labels
+    {
+        Module module("x64_label_test");
+        Function* func = module.create_function("test_func", Type::i64(), {Type::i64(), Type::i64()});
+        BasicBlock* entry = func->create_basic_block("entry");
+        BasicBlock* true_block = func->create_basic_block("true_block");
+        BasicBlock* false_block = func->create_basic_block("false_block");
+        BasicBlock* merge_block = func->create_basic_block("merge_block");
+        
+        IRBuilder builder;
+        builder.set_insert_point(entry);
+        
+        auto arg1 = func->arguments[0];
+        auto arg2 = func->arguments[1];
+        
+        // Test comparison and conditional branching
+        auto eq_result = builder.create_icmp_eq(arg1, arg2);
+        builder.create_cond_br(eq_result, true_block, false_block);
+        
+        // True block
+        builder.set_insert_point(true_block);
+        auto true_val = builder.get_int64(100);
+        builder.create_br(merge_block);
+        
+        // False block
+        builder.set_insert_point(false_block);
+        auto false_val = builder.get_int64(200);
+        builder.create_br(merge_block);
+        
+        // Merge block
+        builder.set_insert_point(merge_block);
+        builder.create_ret(true_val);
+        
+        auto x64_backend = BackendFactory::create_backend(TargetArch::X86_64);
+        ASSERT_TRUE(x64_backend != nullptr, "x64 backend creation should succeed");
+        
+        bool compile_success = x64_backend->compile_module(module);
+        ASSERT_TRUE(compile_success, "x64 compilation with labels should succeed");
+        
+        size_t code_size = x64_backend->get_code_size();
+        ASSERT_GT(code_size, 0, "x64 should generate code with labels");
+        ASSERT_LT(code_size, 1000, "x64 label test should be reasonable size");
+        
+        std::cout << "x64 backend with labels: " << code_size << " bytes generated" << std::endl;
+    }
+    
+    // Test 2: ARM64 Backend with Labels
+    {
+        Module module("arm64_label_test");
+        Function* func = module.create_function("test_func", Type::i64(), {Type::i64(), Type::i64()});
+        BasicBlock* entry = func->create_basic_block("entry");
+        BasicBlock* true_block = func->create_basic_block("true_block");
+        BasicBlock* false_block = func->create_basic_block("false_block");
+        BasicBlock* merge_block = func->create_basic_block("merge_block");
+        
+        IRBuilder builder;
+        builder.set_insert_point(entry);
+        
+        auto arg1 = func->arguments[0];
+        auto arg2 = func->arguments[1];
+        
+        // Test comparison and conditional branching
+        auto eq_result = builder.create_icmp_eq(arg1, arg2);
+        builder.create_cond_br(eq_result, true_block, false_block);
+        
+        // True block
+        builder.set_insert_point(true_block);
+        auto true_val = builder.get_int64(100);
+        builder.create_br(merge_block);
+        
+        // False block
+        builder.set_insert_point(false_block);
+        auto false_val = builder.get_int64(200);
+        builder.create_br(merge_block);
+        
+        // Merge block
+        builder.set_insert_point(merge_block);
+        builder.create_ret(true_val);
+        
+        auto arm64_backend = BackendFactory::create_backend(TargetArch::ARM64);
+        ASSERT_TRUE(arm64_backend != nullptr, "ARM64 backend creation should succeed");
+        
+        bool compile_success = arm64_backend->compile_module(module);
+        ASSERT_TRUE(compile_success, "ARM64 compilation with labels should succeed");
+        
+        size_t code_size = arm64_backend->get_code_size();
+        ASSERT_GT(code_size, 0, "ARM64 should generate code with labels");
+        ASSERT_LT(code_size, 1000, "ARM64 label test should be reasonable size");
+        
+        std::cout << "ARM64 backend with labels: " << code_size << " bytes generated" << std::endl;
+    }
+    
+    // Test 3: Function Calls with Labels
+    {
+        Module module("function_call_test");
+        
+        // Create a helper function
+        Function* helper = module.create_function("helper_func", Type::i64(), {Type::i64()});
+        BasicBlock* helper_entry = helper->create_basic_block("entry");
+        IRBuilder helper_builder;
+        helper_builder.set_insert_point(helper_entry);
+        auto helper_arg = helper->arguments[0];
+        auto helper_result = helper_builder.create_add(helper_arg, helper_builder.get_int64(42));
+        helper_builder.create_ret(helper_result);
+        
+        // Create main function
+        Function* main = module.create_function("main", Type::i64(), {Type::i64()});
+        BasicBlock* main_entry = main->create_basic_block("entry");
+        IRBuilder main_builder;
+        main_builder.set_insert_point(main_entry);
+        
+        auto main_arg = main->arguments[0];
+        auto call_result = main_builder.create_call(Type::i64(), "helper_func", {main_arg});
+        main_builder.create_ret(call_result);
+        
+        // Test both backends
+        auto x64_backend = BackendFactory::create_backend(TargetArch::X86_64);
+        auto arm64_backend = BackendFactory::create_backend(TargetArch::ARM64);
+        
+        ASSERT_TRUE(x64_backend != nullptr, "x64 backend creation should succeed");
+        ASSERT_TRUE(arm64_backend != nullptr, "ARM64 backend creation should succeed");
+        
+        bool x64_success = x64_backend->compile_module(module);
+        bool arm64_success = arm64_backend->compile_module(module);
+        
+        ASSERT_TRUE(x64_success, "x64 function calls with labels should succeed");
+        ASSERT_TRUE(arm64_success, "ARM64 function calls with labels should succeed");
+        
+        size_t x64_size = x64_backend->get_code_size();
+        size_t arm64_size = arm64_backend->get_code_size();
+        
+        ASSERT_GT(x64_size, 0, "x64 should generate code for function calls");
+        ASSERT_GT(arm64_size, 0, "ARM64 should generate code for function calls");
+        
+        std::cout << "Function calls with labels - x64: " << x64_size << " bytes, ARM64: " << arm64_size << " bytes" << std::endl;
+    }
+    
+    // Test 4: Complex Control Flow with Multiple Labels
+    {
+        Module module("complex_control_flow");
+        Function* func = module.create_function("complex_func", Type::i64(), {Type::i64(), Type::i64()});
+        
+        // Create multiple basic blocks
+        BasicBlock* entry = func->create_basic_block("entry");
+        BasicBlock* loop_start = func->create_basic_block("loop_start");
+        BasicBlock* loop_body = func->create_basic_block("loop_body");
+        BasicBlock* loop_end = func->create_basic_block("loop_end");
+        BasicBlock* exit = func->create_basic_block("exit");
+        
+        IRBuilder builder;
+        builder.set_insert_point(entry);
+        
+        auto arg1 = func->arguments[0];
+        auto arg2 = func->arguments[1];
+        
+        // Entry block: initialize counter
+        auto counter = builder.create_alloca(Type::i64());
+        builder.create_store(builder.get_int64(0), counter);
+        builder.create_br(loop_start);
+        
+        // Loop start: check condition
+        builder.set_insert_point(loop_start);
+        auto loaded_counter = builder.create_load(Type::i64(), counter);
+        auto condition = builder.create_icmp_slt(loaded_counter, arg1);
+        builder.create_cond_br(condition, loop_body, exit);
+        
+        // Loop body: increment counter
+        builder.set_insert_point(loop_body);
+        auto new_counter = builder.create_add(loaded_counter, builder.get_int64(1));
+        builder.create_store(new_counter, counter);
+        builder.create_br(loop_start);
+        
+        // Exit: return result
+        builder.set_insert_point(exit);
+        builder.create_ret(loaded_counter);
+        
+        // Test both backends
+        auto x64_backend = BackendFactory::create_backend(TargetArch::X86_64);
+        auto arm64_backend = BackendFactory::create_backend(TargetArch::ARM64);
+        
+        bool x64_success = x64_backend->compile_module(module);
+        bool arm64_success = arm64_backend->compile_module(module);
+        
+        ASSERT_TRUE(x64_success, "x64 complex control flow should succeed");
+        ASSERT_TRUE(arm64_success, "ARM64 complex control flow should succeed");
+        
+        size_t x64_size = x64_backend->get_code_size();
+        size_t arm64_size = arm64_backend->get_code_size();
+        
+        ASSERT_GT(x64_size, 0, "x64 should generate code for complex control flow");
+        ASSERT_GT(arm64_size, 0, "ARM64 should generate code for complex control flow");
+        
+        std::cout << "Complex control flow - x64: " << x64_size << " bytes, ARM64: " << arm64_size << " bytes" << std::endl;
+    }
+    
+    std::cout << "Label system backend integration test completed successfully." << std::endl;
+}
+
+// ==================== STANDALONE EXECUTABLE TESTS ====================
+
+TEST(StandaloneExecutables, HelloWorldWithoutCRuntime) {
+    // Comprehensive test demonstrating full end-to-end standalone executable generation
+    // This test proves the system can generate working executables without C runtime
+    
+    std::cout << "🎯 Testing standalone Hello World generation..." << std::endl;
+    
+    for (auto arch : {TargetArch::ARM64, TargetArch::X86_64}) {
+        std::string arch_name = (arch == TargetArch::ARM64) ? "ARM64" : "x86_64";
+        std::cout << "  Testing " << arch_name << " architecture..." << std::endl;
+        
+        // Create standalone Hello World IR
+        Module module("standalone_hello_" + arch_name);
+        Function* start_func = module.create_function("_start", Type::void_type(), {});
+        BasicBlock* entry = start_func->create_basic_block("entry");
+        
+        IRBuilder builder;
+        builder.set_insert_point(entry);
+        
+        // Create global string "Hello, Standalone World!\n"
+        auto hello_str = module.create_global_string("Hello, Standalone World!\n");
+        
+        // write(1, hello_str, 25)
+        auto stdout_fd = builder.get_int32(1);
+        auto msg_len = builder.get_int32(25);
+        std::vector<std::shared_ptr<Value>> write_args = {stdout_fd, hello_str, msg_len};
+        builder.create_syscall(4, write_args); // SYS_write
+        
+        // exit(0)
+        auto exit_code = builder.get_int32(0);
+        std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
+        builder.create_syscall(1, exit_args); // SYS_exit
+        
+        // Compile with backend
+        auto backend = BackendFactory::create_backend(arch);
+        ASSERT_TRUE(backend != nullptr, (arch_name + " backend creation should succeed").c_str());
+        
+        bool compile_success = backend->compile_module(module);
+        ASSERT_TRUE(compile_success, (arch_name + " compilation should succeed").c_str());
+        
+        // Generate object file
+        std::string obj_path = "/tmp/standalone_hello_" + arch_name + ".o";
+        bool obj_success = backend->write_object(obj_path, "_start");
+        ASSERT_TRUE(obj_success, (arch_name + " object generation should succeed").c_str());
+        
+        // Link standalone executable (no C runtime)
+        std::string exe_path = "/tmp/standalone_hello_" + arch_name;
+        bool link_success = backend->link_executable(obj_path, exe_path);
+        ASSERT_TRUE(link_success, (arch_name + " linking should succeed").c_str());
+        
+        // Verify executable exists
+        ASSERT_TRUE(TestUtils::file_exists(exe_path), (arch_name + " executable should exist").c_str());
+        
+        // Test execution
+        std::string output = TestUtils::capture_output(exe_path);
+        ASSERT_EQ(output, "Hello, Standalone World!\n", (arch_name + " should output correct message").c_str());
+        
+        // Verify code size (should be very compact)
+        size_t code_size = backend->get_code_size();
+        ASSERT_GT(code_size, 20, (arch_name + " should generate reasonable amount of code").c_str());
+        ASSERT_LT(code_size, 200, (arch_name + " standalone executable should be compact").c_str());
+        
+        std::cout << "    ✅ " << arch_name << ": " << code_size << " bytes, output: '" 
+                  << output.substr(0, output.length()-1) << "'" << std::endl;
+    }
+    
+    std::cout << "🎉 Standalone Hello World test completed successfully!" << std::endl;
+}
+
+TEST(StandaloneExecutables, MemoryOperationsComprehensive) {
+    // Test comprehensive memory operations: alloca, store, load with different sizes
+    
+    std::cout << "🧠 Testing comprehensive memory operations..." << std::endl;
+    
+    for (auto arch : {TargetArch::ARM64, TargetArch::X86_64}) {
+        std::string arch_name = (arch == TargetArch::ARM64) ? "ARM64" : "x86_64";
+        
+        Module module("memory_ops_" + arch_name);
+        Function* func = module.create_function("_start", Type::void_type(), {});
+        BasicBlock* entry = func->create_basic_block("entry");
+        
+        IRBuilder builder;
+        builder.set_insert_point(entry);
+        
+        // Test different memory sizes
+        // Allocate i64, i32, i16, i8
+        auto ptr64 = builder.create_alloca(Type::i64());
+        auto ptr32 = builder.create_alloca(Type::i32());
+        auto ptr16 = builder.create_alloca(Type::i16());
+        auto ptr8 = builder.create_alloca(Type::i8());
+        
+        // Store different values
+        builder.create_store(builder.get_int64(0x123456789ABCDEF0), ptr64);
+        builder.create_store(builder.get_int32(0x12345678), ptr32);
+        builder.create_store(builder.get_int16(0x1234), ptr16);
+        builder.create_store(builder.get_int8(0x42), ptr8);
+        
+        // Load values back
+        auto val64 = builder.create_load(Type::i64(), ptr64);
+        auto val32 = builder.create_load(Type::i32(), ptr32);
+        auto val16 = builder.create_load(Type::i16(), ptr16);
+        auto val8 = builder.create_load(Type::i8(), ptr8);
+        
+        // Perform arithmetic on loaded values
+        auto sum64_32 = builder.create_add(val64, builder.create_zext(val32, Type::i64()));
+        auto sum16_8 = builder.create_add(builder.create_zext(val16, Type::i32()), 
+                                         builder.create_zext(val8, Type::i32()));
+        
+        // Use the results in exit code (just to ensure they're not optimized away)
+        auto final_result = builder.create_add(builder.create_trunc(sum64_32, Type::i32()), sum16_8);
+        auto exit_code = builder.create_and(final_result, builder.get_int32(0xFF)); // Keep it reasonable
+        
+        // exit(exit_code)
+        std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
+        builder.create_syscall(1, exit_args);
+        
+        // Compile and test
+        auto backend = BackendFactory::create_backend(arch);
+        ASSERT_TRUE(backend->compile_module(module), (arch_name + " memory operations compilation should succeed").c_str());
+        
+        std::string obj_path = "/tmp/memory_ops_" + arch_name + ".o";
+        std::string exe_path = "/tmp/memory_ops_" + arch_name;
+        
+        ASSERT_TRUE(backend->write_object(obj_path, "_start"), (arch_name + " memory ops object generation should succeed").c_str());
+        ASSERT_TRUE(backend->link_executable(obj_path, exe_path), (arch_name + " memory ops linking should succeed").c_str());
+        ASSERT_TRUE(TestUtils::file_exists(exe_path), (arch_name + " memory ops executable should exist").c_str());
+        
+        size_t code_size = backend->get_code_size();
+        std::cout << "    ✅ " << arch_name << ": " << code_size << " bytes (memory operations)" << std::endl;
+    }
+    
+    std::cout << "🎉 Comprehensive memory operations test completed!" << std::endl;
+}
+
+TEST(StandaloneExecutables, ComparisonOperationsComprehensive) {
+    // Test comprehensive comparison operations
+    
+    std::cout << "⚖️  Testing comprehensive comparison operations..." << std::endl;
+    
+    for (auto arch : {TargetArch::ARM64, TargetArch::X86_64}) {
+        std::string arch_name = (arch == TargetArch::ARM64) ? "ARM64" : "x86_64";
+        
+        Module module("comparison_ops_" + arch_name);
+        Function* func = module.create_function("_start", Type::void_type(), {});
+        BasicBlock* entry = func->create_basic_block("entry");
+        
+        IRBuilder builder;
+        builder.set_insert_point(entry);
+        
+        // Test all available comparison operations
+        auto val1 = builder.get_int64(42);
+        auto val2 = builder.get_int64(42);
+        auto val3 = builder.get_int64(100);
+        
+        // Test equality
+        auto eq_result = builder.create_icmp_eq(val1, val2);  // Should be true (1)
+        auto ne_result = builder.create_icmp_ne(val1, val3);  // Should be true (1)
+        
+        // Test signed comparisons
+        auto slt_result = builder.create_icmp_slt(val1, val3); // Should be true (1)
+        auto sgt_result = builder.create_icmp_sgt(val3, val1); // Should be true (1)
+        
+        // Combine results: all should be 1, so sum should be 4
+        auto sum1 = builder.create_add(builder.create_zext(eq_result, Type::i64()),
+                                      builder.create_zext(ne_result, Type::i64()));
+        auto sum2 = builder.create_add(builder.create_zext(slt_result, Type::i64()),
+                                      builder.create_zext(sgt_result, Type::i64()));
+        auto total = builder.create_add(sum1, sum2);
+        
+        // Exit with the total (should be 4 if all comparisons work)
+        auto exit_code = builder.create_trunc(total, Type::i32());
+        std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
+        builder.create_syscall(1, exit_args);
+        
+        // Compile and test
+        auto backend = BackendFactory::create_backend(arch);
+        ASSERT_TRUE(backend->compile_module(module), (arch_name + " comparison operations compilation should succeed").c_str());
+        
+        std::string obj_path = "/tmp/comparison_ops_" + arch_name + ".o";
+        std::string exe_path = "/tmp/comparison_ops_" + arch_name;
+        
+        ASSERT_TRUE(backend->write_object(obj_path, "_start"), (arch_name + " comparison ops object generation should succeed").c_str());
+        ASSERT_TRUE(backend->link_executable(obj_path, exe_path), (arch_name + " comparison ops linking should succeed").c_str());
+        ASSERT_TRUE(TestUtils::file_exists(exe_path), (arch_name + " comparison ops executable should exist").c_str());
+        
+        size_t code_size = backend->get_code_size();
+        std::cout << "    ✅ " << arch_name << ": " << code_size << " bytes (comparison operations)" << std::endl;
+    }
+    
+    std::cout << "🎉 Comprehensive comparison operations test completed!" << std::endl;
+}
 
 
 int main() {

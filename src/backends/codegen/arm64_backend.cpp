@@ -12,6 +12,12 @@ ARM64Backend::ARM64Backend() : next_reg(X0) {
 
 bool ARM64Backend::compile_module(const IR::Module& module) {
   try {
+    // Validate module
+    if (module.functions.empty()) {
+      std::cerr << "Error: Module contains no functions" << std::endl;
+      return false;
+    }
+    
     // If there is a main function, emit a real _start that calls it and exits
     const IR::Function* mainFunc = nullptr;
     for (const auto& f : module.functions) {
@@ -35,6 +41,9 @@ bool ARM64Backend::compile_module(const IR::Module& module) {
     return true;
   } catch (const std::exception& e) {
     std::cerr << "ARM64Backend compilation error: " << e.what() << std::endl;
+    return false;
+  } catch (...) {
+    std::cerr << "ARM64Backend compilation error: Unknown exception" << std::endl;
     return false;
   }
 }
@@ -60,6 +69,13 @@ void ARM64Backend::compile_function(const IR::Function& func) {
 }
 
 void ARM64Backend::compile_basic_block(const IR::BasicBlock& bb) {
+  // Bind the label for this basic block if it exists
+  std::string label_name = "block_" + bb.name;
+  auto it = string_labels.find(label_name);
+  if (it != string_labels.end()) {
+    assembler->bind(it->second);
+  }
+  
   for (const auto& inst : bb.instructions) {
     compile_instruction(*inst);
   }
@@ -237,13 +253,154 @@ void ARM64Backend::compile_instruction(const IR::Instruction& inst) {
       break;
     }
     
-    // TODO: Integer comparison operations (ICMP_EQ, ICMP_NE, etc.)
-    // These require assembler API extensions for cset instruction
+    // Integer comparison operations
+    case IR::Opcode::ICMP_EQ: {
+      if (inst.operands.size() != 2) {
+        std::cerr << "Error: ICMP_EQ instruction requires exactly 2 operands, got " << inst.operands.size() << std::endl;
+        break;
+      }
+      
+      auto src1_reg = get_operand_register(inst.operands[0]);
+      auto src2_reg = get_operand_register(inst.operands[1]);
+      auto dst_reg = get_or_alloc_register(inst.result_reg);
+      
+      // Compare registers
+      assembler->cmp_reg(src1_reg, src2_reg);
+      // Use conditional select: if equal, select 1, otherwise 0
+      assembler->mov_imm(dst_reg, 0);  // Default value (false)
+      assembler->mov_imm(X17, 1);  // True value
+      assembler->csel(dst_reg, X17, dst_reg, EQ);  // Select 1 if equal, 0 otherwise
+      break;
+    }
+    
+    case IR::Opcode::ICMP_NE: {
+      if (inst.operands.size() != 2) {
+        std::cerr << "Error: ICMP_NE instruction requires exactly 2 operands, got " << inst.operands.size() << std::endl;
+        break;
+      }
+      
+      auto src1_reg = get_operand_register(inst.operands[0]);
+      auto src2_reg = get_operand_register(inst.operands[1]);
+      auto dst_reg = get_or_alloc_register(inst.result_reg);
+      
+      // Compare registers
+      assembler->cmp_reg(src1_reg, src2_reg);
+      // Use conditional select: if not equal, select 1, otherwise 0
+      assembler->mov_imm(dst_reg, 0);  // Default value (false)
+      assembler->mov_imm(X17, 1);  // True value
+      assembler->csel(dst_reg, X17, dst_reg, NE);  // Select 1 if not equal, 0 otherwise
+      break;
+    }
+    
+    case IR::Opcode::ICMP_SLT: {
+      if (inst.operands.size() != 2) {
+        std::cerr << "Error: ICMP_SLT instruction requires exactly 2 operands, got " << inst.operands.size() << std::endl;
+        break;
+      }
+      
+      auto src1_reg = get_operand_register(inst.operands[0]);
+      auto src2_reg = get_operand_register(inst.operands[1]);
+      auto dst_reg = get_or_alloc_register(inst.result_reg);
+      
+      // Compare registers (signed)
+      assembler->cmp_reg(src1_reg, src2_reg);
+      // Use conditional select: if less than, select 1, otherwise 0
+      assembler->mov_imm(dst_reg, 0);  // Default value (false)
+      assembler->mov_imm(X17, 1);  // True value
+      assembler->csel(dst_reg, X17, dst_reg, LT);  // Select 1 if less than, 0 otherwise
+      break;
+    }
+    
+    case IR::Opcode::ICMP_SGT: {
+      if (inst.operands.size() != 2) {
+        std::cerr << "Error: ICMP_SGT instruction requires exactly 2 operands, got " << inst.operands.size() << std::endl;
+        break;
+      }
+      
+      auto src1_reg = get_operand_register(inst.operands[0]);
+      auto src2_reg = get_operand_register(inst.operands[1]);
+      auto dst_reg = get_or_alloc_register(inst.result_reg);
+      
+      // Compare registers (signed)
+      assembler->cmp_reg(src1_reg, src2_reg);
+      // Use conditional select: if greater than, select 1, otherwise 0
+      assembler->mov_imm(dst_reg, 0);  // Default value (false)
+      assembler->mov_imm(X17, 1);  // True value
+      assembler->csel(dst_reg, X17, dst_reg, GT);  // Select 1 if greater than, 0 otherwise
+      break;
+    }
+    
+        // Control flow instructions
+    case IR::Opcode::BR: {
+      const auto& br_inst = static_cast<const IR::BranchInst&>(inst);
+      if (br_inst.target_block) {
+        // Create a label for the target block if it doesn't exist
+        std::string label_name = "block_" + br_inst.target_block->name;
+        auto& label = string_labels[label_name];
+        
+        // Unconditional branch to the label
+        assembler->b(label);
+      }
+      break;
+    }
+    
+    case IR::Opcode::BR_COND: {
+      const auto& br_inst = static_cast<const IR::BranchInst&>(inst);
+      if (!inst.operands.empty() && br_inst.target_block && br_inst.false_block) {
+        auto cond_reg = get_operand_register(inst.operands[0]);
+        
+        // Create labels for both blocks
+        std::string true_label_name = "block_" + br_inst.target_block->name;
+        std::string false_label_name = "block_" + br_inst.false_block->name;
+        auto& true_label = string_labels[true_label_name];
+        auto& false_label = string_labels[false_label_name];
+        
+        // Test condition and branch
+        assembler->cmp_reg(cond_reg, XZR); // Compare with zero
+        // Conditional jump to true block (if condition is non-zero)
+        assembler->b_cond(NE, true_label);
+        // Unconditional jump to false block
+        assembler->b(false_label);
+      }
+      break;
+    }
+    
+    case IR::Opcode::CALL: {
+      const auto& call_inst = static_cast<const IR::CallInst&>(inst);
+      
+      // Load arguments into correct registers (ARM64 calling convention)
+      nextgen::jet::arm64::Register arg_regs[] = {X0, X1, X2, X3, X4, X5, X6, X7};
+      
+      for (size_t i = 0; i < call_inst.operands.size() && i < 8; ++i) {
+        auto arg_reg = get_operand_register(call_inst.operands[i]);
+        assembler->mov_reg(arg_regs[i], arg_reg);
+      }
+      
+      if (call_inst.function_name.length() > 0) {
+        // Create a label for the function if it doesn't exist
+        std::string func_label_name = "func_" + call_inst.function_name;
+        auto& func_label = string_labels[func_label_name];
+        
+        // Call the function
+        assembler->bl(func_label);
+      } else {
+        // External call - use placeholder for now
+        assembler->nop(); // Placeholder for external call
+      }
+      
+      // Move return value to result register
+      if (inst.result_reg) {
+        auto dst_reg = get_or_alloc_register(inst.result_reg);
+        assembler->mov_reg(dst_reg, X0); // Return value in X0
+      }
+      break;
+    }
     
     case IR::Opcode::RET: {
       if (!inst.operands.empty()) {
         // Return with value - move to X0
-        assembler->mov_imm(X0, 42); // Placeholder
+        auto ret_reg = get_operand_register(inst.operands[0]);
+        assembler->mov_reg(X0, ret_reg);
       }
       assembler->ldp(FP, LR, SP, 16);
       assembler->ret();
@@ -304,7 +461,7 @@ void ARM64Backend::compile_instruction(const IR::Instruction& inst) {
   }
 }
 
-void ARM64Backend::emit_atomic_load(const IR::AtomicLoadInst& inst) {
+void CodeGen::ARM64Backend::emit_atomic_load(const IR::AtomicLoadInst& inst) {
   auto dst_reg = get_register_for_type(inst.result_type);
   
   // Choose appropriate load instruction based on memory ordering
@@ -333,7 +490,7 @@ void ARM64Backend::emit_atomic_load(const IR::AtomicLoadInst& inst) {
   }
 }
 
-void ARM64Backend::emit_atomic_store(const IR::AtomicStoreInst& inst) {
+void CodeGen::ARM64Backend::emit_atomic_store(const IR::AtomicStoreInst& inst) {
   auto src_reg = get_register_for_type(inst.operands[0]->type);
   
   // Choose appropriate store instruction based on memory ordering
@@ -362,7 +519,7 @@ void ARM64Backend::emit_atomic_store(const IR::AtomicStoreInst& inst) {
   }
 }
 
-void ARM64Backend::emit_atomic_cas(const IR::AtomicCASInst& inst) {
+void CodeGen::ARM64Backend::emit_atomic_cas(const IR::AtomicCASInst& inst) {
   Label retry, success, fail;
   
   // ARM64 CAS using load-exclusive/store-exclusive
@@ -395,7 +552,7 @@ void ARM64Backend::emit_atomic_cas(const IR::AtomicCASInst& inst) {
   assembler->mov_imm(X5, 0);  // Failure flag
 }
 
-void ARM64Backend::emit_atomic_rmw(const IR::AtomicRMWInst& inst) {
+void CodeGen::ARM64Backend::emit_atomic_rmw(const IR::AtomicRMWInst& inst) {
   // Use modern ARM64 atomic instructions if available, otherwise LL/SC
   switch (inst.rmw_operation) {
     case IR::AtomicRMWOp::ADD:
@@ -449,7 +606,7 @@ void ARM64Backend::emit_atomic_rmw(const IR::AtomicRMWInst& inst) {
   }
 }
 
-void ARM64Backend::emit_atomic_fence(const IR::AtomicFenceInst& inst) {
+void CodeGen::ARM64Backend::emit_atomic_fence(const IR::AtomicFenceInst& inst) {
   emit_memory_barrier(inst.memory_ordering);
 }
 

@@ -21,6 +21,12 @@ X64Backend::X64Backend() : next_reg(AX), use_advanced_allocation(false) {
 
 bool X64Backend::compile_module(const IR::Module& module) {
   try {
+    // Validate module
+    if (module.functions.empty()) {
+      std::cerr << "Error: Module contains no functions" << std::endl;
+      return false;
+    }
+    
     // For now, just cast away const for register allocation
     // TODO: Make register allocation const-correct
     IR::Module& mutable_module = const_cast<IR::Module&>(module);
@@ -42,6 +48,9 @@ bool X64Backend::compile_module(const IR::Module& module) {
     return true;
   } catch (const std::exception& e) {
     std::cerr << "X64Backend compilation error: " << e.what() << std::endl;
+    return false;
+  } catch (...) {
+    std::cerr << "X64Backend compilation error: Unknown exception" << std::endl;
     return false;
   }
 }
@@ -68,6 +77,13 @@ void X64Backend::compile_function(const IR::Function& func) {
 }
 
 void X64Backend::compile_basic_block(const IR::BasicBlock& bb) {
+  // Bind the label for this basic block if it exists
+  std::string label_name = "block_" + bb.name;
+  auto it = string_labels.find(label_name);
+  if (it != string_labels.end()) {
+    assembler->bind(it->second);
+  }
+  
   for (const auto& inst : bb.instructions) {
     compile_instruction(*inst);
   }
@@ -488,9 +504,12 @@ void X64Backend::compile_instruction(const IR::Instruction& inst) {
     case IR::Opcode::BR: {
       const auto& br_inst = static_cast<const IR::BranchInst&>(inst);
       if (br_inst.target_block) {
-        // Unconditional branch - for now use a simple jump
-        // In a complete implementation, this would use block labels
-        assembler->nop(); // Placeholder - would be jmp to block label
+        // Create a label for the target block if it doesn't exist
+        std::string label_name = "block_" + br_inst.target_block->name;
+        auto& label = string_labels[label_name];
+        
+        // Unconditional branch to the label
+        assembler->jmp(label);
       }
       break;
     }
@@ -500,11 +519,18 @@ void X64Backend::compile_instruction(const IR::Instruction& inst) {
       if (!inst.operands.empty() && br_inst.target_block && br_inst.false_block) {
         auto cond_reg = get_operand_register(inst.operands[0]);
         
+        // Create labels for both blocks
+        std::string true_label_name = "block_" + br_inst.target_block->name;
+        std::string false_label_name = "block_" + br_inst.false_block->name;
+        auto& true_label = string_labels[true_label_name];
+        auto& false_label = string_labels[false_label_name];
+        
         // Test condition and branch
         assembler->testq(cond_reg, cond_reg);
-        // For now, use nop placeholders - would be conditional jumps in complete implementation
-        assembler->nop(); // jne to true_block
-        assembler->nop(); // jmp to false_block
+        // Conditional jump to true block (if condition is non-zero)
+        assembler->jump_cond(nextgen::jet::x64::NotEqual, true_label);
+        // Unconditional jump to false block
+        assembler->jmp(false_label);
       }
       break;
     }
@@ -520,8 +546,17 @@ void X64Backend::compile_instruction(const IR::Instruction& inst) {
         assembler->movq(arg_regs[i], arg_reg);
       }
       
-      // For now, emit a placeholder call - in complete implementation would resolve function address
-      assembler->nop(); // Placeholder for call instruction
+      if (call_inst.function_name.length() > 0) {
+        // Create a label for the function if it doesn't exist
+        std::string func_label_name = "func_" + call_inst.function_name;
+        auto& func_label = string_labels[func_label_name];
+        
+        // Call the function
+        assembler->call(func_label);
+      } else {
+        // External call - use placeholder for now
+        assembler->call(Imm32{0x12345678});
+      }
       
       // Move return value to result register
       if (inst.result_reg) {

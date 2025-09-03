@@ -25,6 +25,9 @@ private:
   std::vector<std::pair<std::string, uint32_t>> data_symbols; // name -> data offset
   MachOBuilder64 macho_builder;
   
+  // Label management for control flow
+  std::map<std::string, nextgen::jet::arm64::Label> string_labels;
+  
   // Register allocation (simple for now)
   std::map<uint32_t, nextgen::jet::arm64::Register> reg_map;
   nextgen::jet::arm64::Register next_reg;
