@@ -37,14 +37,14 @@ jobs:
       run: |
         mkdir -p build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_VERBOSE_MAKEFILE=ON
         
-    - name: Configure build (macOS)
+    - name: Configure build (macOS)  
       if: runner.os == 'macOS'
       run: |
         mkdir -p build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_VERBOSE_MAKEFILE=ON
         
     - name: Build project
       run: |
@@ -69,8 +69,15 @@ jobs:
     - name: Test example programs
       run: |
         cd build
-        timeout 30s ./x64_assembler_demo || true
-        timeout 10s ./hello_macho || true
+        # Test core examples with timeout protection
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          timeout 30s ./x64_assembler_demo || echo "x64_assembler_demo completed or timed out"
+          timeout 10s ./hello_macho || echo "hello_macho completed or timed out"  
+        else
+          # macOS doesn't have timeout by default, use gtimeout if available
+          gtimeout 30s ./x64_assembler_demo 2>/dev/null || ./x64_assembler_demo || echo "x64_assembler_demo completed"
+          gtimeout 10s ./hello_macho 2>/dev/null || ./hello_macho || echo "hello_macho completed"
+        fi
         
   code-quality:
     name: Code Quality
@@ -87,9 +94,11 @@ jobs:
         grep -r "TODO\|FIXME" src/ tests/ examples/ || echo "No TODOs found"
         
         echo "Checking for trailing whitespace..."
-        if grep -r "[[:space:]]$" src/ tests/ examples/ --include="*.cpp" --include="*.h"; then
+        if grep -r "[[:space:]]$" src/ tests/ examples/ --include="*.cpp" --include="*.h" 2>/dev/null; then
           echo "Found trailing whitespace!"
           exit 1
+        else
+          echo "No trailing whitespace found."
         fi
         
         echo "Code quality checks passed!"

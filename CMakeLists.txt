@@ -154,22 +154,32 @@ add_executable(generated ${GENERATED_S})
 add_dependencies(generated emit_exe)
 set_target_properties(generated PROPERTIES XCODE_ATTRIBUTE_ARCHS "x86_64")
 
-# Hello world syscall-only demos
-add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/hello_name_x64
-  COMMAND clang -arch x86_64 -e _start -Wl,-no_pie -o ${CMAKE_BINARY_DIR}/hello_name_x64 ${CMAKE_SOURCE_DIR}/assembly/hello_name_x64_macos.s
-  DEPENDS ${CMAKE_SOURCE_DIR}/assembly/hello_name_x64_macos.s
-  COMMENT "Building hello_name_x64"
-)
-add_custom_target(hello_name_x64 ALL DEPENDS ${CMAKE_BINARY_DIR}/hello_name_x64)
+# Hello world syscall-only demos (only build on macOS)
+if(APPLE)
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/hello_name_x64_exe
+    COMMAND clang -arch x86_64 -e _start -Wl,-no_pie -o ${CMAKE_BINARY_DIR}/hello_name_x64_exe ${CMAKE_SOURCE_DIR}/assembly/hello_name_x64_macos.s
+    DEPENDS ${CMAKE_SOURCE_DIR}/assembly/hello_name_x64_macos.s
+    COMMENT "Building hello_name_x64 executable"
+  )
+  add_custom_target(hello_name_x64 ALL DEPENDS ${CMAKE_BINARY_DIR}/hello_name_x64_exe)
 
-add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/hello_name_arm64
-  COMMAND clang -arch arm64 -e _start -Wl,-no_pie -o ${CMAKE_BINARY_DIR}/hello_name_arm64 ${CMAKE_SOURCE_DIR}/assembly/hello_name_arm64_macos.s
-  DEPENDS ${CMAKE_SOURCE_DIR}/assembly/hello_name_arm64_macos.s
-  COMMENT "Building hello_name_arm64"
-)
-add_custom_target(hello_name_arm64 ALL DEPENDS ${CMAKE_BINARY_DIR}/hello_name_arm64)
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/hello_name_arm64_exe
+    COMMAND clang -arch arm64 -e _start -Wl,-no_pie -o ${CMAKE_BINARY_DIR}/hello_name_arm64_exe ${CMAKE_SOURCE_DIR}/assembly/hello_name_arm64_macos.s
+    DEPENDS ${CMAKE_SOURCE_DIR}/assembly/hello_name_arm64_macos.s
+    COMMENT "Building hello_name_arm64 executable"
+  )
+  add_custom_target(hello_name_arm64 ALL DEPENDS ${CMAKE_BINARY_DIR}/hello_name_arm64_exe)
+else()
+  # On non-macOS systems, create dummy targets to avoid build errors
+  add_custom_target(hello_name_x64
+    COMMAND ${CMAKE_COMMAND} -E echo "hello_name_x64: Skipping macOS-specific assembly build on this platform"
+  )
+  add_custom_target(hello_name_arm64 
+    COMMAND ${CMAKE_COMMAND} -E echo "hello_name_arm64: Skipping macOS-specific assembly build on this platform"
+  )
+endif()
 
 # =============================================================================
 # BUILD TARGETS SUMMARY
