@@ -455,8 +455,8 @@ public:
   void testq(Register reg, Imm32 imm);
   
   // Arithmetic with carry
-  instruction_binary(adc);  // Add with carry
-  instruction_binary(sbb);  // Subtract with borrow
+  instruction_binary(adc)  // Add with carry
+  instruction_binary(sbb)  // Subtract with borrow
   
   // Zero/Sign extend moves
   void movzxb(Register dest, Register src);   // Zero extend byte to word/dword/qword

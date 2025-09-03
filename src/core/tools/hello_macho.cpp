@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include "assemblers/x64-codegen.h"
 #include "macho_builder.h"
 
