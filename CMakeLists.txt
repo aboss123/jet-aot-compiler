@@ -142,7 +142,7 @@ target_link_libraries(test_relocation PRIVATE x64_assembler module_linker macho_
 
 enable_language(ASM)
 
-# Generate assembly and link it into an x86_64 Mach-O executable
+# Generate assembly and link it into an executable
 set(GENERATED_S "${CMAKE_CURRENT_BINARY_DIR}/generated.s")
 add_custom_command(
   OUTPUT ${GENERATED_S}
@@ -150,9 +150,22 @@ add_custom_command(
   DEPENDS emit_exe
   COMMENT "Generating ${GENERATED_S} from code generator"
 )
-add_executable(generated ${GENERATED_S})
-add_dependencies(generated emit_exe)
-set_target_properties(generated PROPERTIES XCODE_ATTRIBUTE_ARCHS "x86_64")
+
+# Create executable with platform-specific linking
+if(APPLE)
+  add_executable(generated ${GENERATED_S})
+  add_dependencies(generated emit_exe)
+  set_target_properties(generated PROPERTIES XCODE_ATTRIBUTE_ARCHS "x86_64")
+else()
+  # On Linux, link without C runtime since we use syscalls directly
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/generated
+    COMMAND ${CMAKE_C_COMPILER} -nostdlib -nostartfiles -e main -o ${CMAKE_BINARY_DIR}/generated ${GENERATED_S}
+    DEPENDS ${GENERATED_S}
+    COMMENT "Linking generated executable with direct syscalls"
+  )
+  add_custom_target(generated ALL DEPENDS ${CMAKE_BINARY_DIR}/generated)
+endif()
 
 # Hello world syscall-only demos (only build on macOS)
 if(APPLE)
