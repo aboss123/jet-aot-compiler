@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <vector>
+#include <string>
+#include <utility>
 
 // Minimal Mach-O 64-bit builder for MH_EXECUTE with LC_SEGMENT_64 + LC_MAIN
 // Code and data are placed contiguously in __TEXT,__text. Entry is at offset 0 by default.

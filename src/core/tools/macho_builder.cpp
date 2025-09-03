@@ -229,11 +229,12 @@ bool MachOBuilder64::write_object_with_data(const char* path,
                                             uint32_t symbol_offset,
                                             MachOArch arch) {
   // Mach-O header
-  mach_header_64_t mh = {0};
+  mach_header_64_t mh = {};
   mh.magic = 0xfeedfacf; // MH_MAGIC_64
   mh.filetype = 1; // MH_OBJECT
   mh.ncmds = 2; // LC_SEGMENT_64 for __TEXT and __DATA, LC_SYMTAB
   mh.flags = 0;
+  mh.reserved = 0;
 
   // Set architecture
   if (arch == MachOArch::ARM64) {
@@ -248,7 +249,7 @@ bool MachOBuilder64::write_object_with_data(const char* path,
   std::vector<uint8_t> lc;
 
   // LC_SEGMENT_64 for __TEXT
-  segment_command_64_t seg_text = {0};
+  segment_command_64_t seg_text = {};
   seg_text.cmd = 0x19; // LC_SEGMENT_64
   seg_text.cmdsize = sizeof(segment_command_64_t) + sizeof(section_64_t);
   std::strncpy(seg_text.segname, "__TEXT", 16);
@@ -261,7 +262,7 @@ bool MachOBuilder64::write_object_with_data(const char* path,
   seg_text.nsects = 1;
   seg_text.flags = 0;
 
-  section_64_t sect_text = {0};
+  section_64_t sect_text = {};
   std::strncpy(sect_text.sectname, "__text", 16);
   std::strncpy(sect_text.segname, "__TEXT", 16);
   sect_text.addr = 0;
@@ -273,9 +274,10 @@ bool MachOBuilder64::write_object_with_data(const char* path,
   sect_text.flags = 0x80000400; // S_REGULAR | S_ATTR_PURE_INSTRUCTIONS
   sect_text.reserved1 = 0;
   sect_text.reserved2 = 0;
+  sect_text.reserved3 = 0;
 
   // LC_SEGMENT_64 for __DATA
-  segment_command_64_t seg_data = {0};
+  segment_command_64_t seg_data = {};
   seg_data.cmd = 0x19; // LC_SEGMENT_64
   seg_data.cmdsize = sizeof(segment_command_64_t) + sizeof(section_64_t);
   std::strncpy(seg_data.segname, "__DATA", 16);
@@ -288,7 +290,7 @@ bool MachOBuilder64::write_object_with_data(const char* path,
   seg_data.nsects = 1;
   seg_data.flags = 0;
 
-  section_64_t sect_data = {0};
+  section_64_t sect_data = {};
   std::strncpy(sect_data.sectname, "__data", 16);
   std::strncpy(sect_data.segname, "__DATA", 16);
   sect_data.addr = text_size; // Start after text
@@ -300,9 +302,10 @@ bool MachOBuilder64::write_object_with_data(const char* path,
   sect_data.flags = 0; // S_REGULAR
   sect_data.reserved1 = 0;
   sect_data.reserved2 = 0;
+  sect_data.reserved3 = 0;
 
   // LC_SYMTAB
-  symtab_command st = {0};
+  symtab_command st = {};
   st.cmd = 2; // LC_SYMTAB
   st.cmdsize = sizeof(symtab_command);
 
@@ -408,7 +411,7 @@ bool MachOBuilder64::write_object_with_relocations(const char* path,
   std::vector<uint8_t> lc;
 
   // LC_SEGMENT_64 for __TEXT
-  segment_command_64_t seg_text = {0};
+  segment_command_64_t seg_text = {};
   seg_text.cmd = 0x19; // LC_SEGMENT_64
   seg_text.cmdsize = sizeof(segment_command_64_t) + sizeof(section_64_t);
   std::strncpy(seg_text.segname, "__TEXT", 16);
@@ -421,7 +424,7 @@ bool MachOBuilder64::write_object_with_relocations(const char* path,
   seg_text.nsects = 1;
   seg_text.flags = 0;
 
-  section_64_t sect_text = {0};
+  section_64_t sect_text = {};
   std::strncpy(sect_text.sectname, "__text", 16);
   std::strncpy(sect_text.segname, "__TEXT", 16);
   sect_text.addr = 0;
@@ -433,9 +436,10 @@ bool MachOBuilder64::write_object_with_relocations(const char* path,
   sect_text.flags = 0x80000400; // S_REGULAR | S_ATTR_PURE_INSTRUCTIONS
   sect_text.reserved1 = 0;
   sect_text.reserved2 = 0;
+  sect_text.reserved3 = 0;
 
   // LC_SEGMENT_64 for __DATA
-  segment_command_64_t seg_data = {0};
+  segment_command_64_t seg_data = {};
   seg_data.cmd = 0x19; // LC_SEGMENT_64
   seg_data.cmdsize = sizeof(segment_command_64_t) + sizeof(section_64_t);
   std::strncpy(seg_data.segname, "__DATA", 16);
@@ -448,7 +452,7 @@ bool MachOBuilder64::write_object_with_relocations(const char* path,
   seg_data.nsects = 1;
   seg_data.flags = 0;
 
-  section_64_t sect_data = {0};
+  section_64_t sect_data = {};
   std::strncpy(sect_data.sectname, "__data", 16);
   std::strncpy(sect_data.segname, "__DATA", 16);
   sect_data.addr = text_size; // Start after text
@@ -460,9 +464,10 @@ bool MachOBuilder64::write_object_with_relocations(const char* path,
   sect_data.flags = 0; // S_REGULAR
   sect_data.reserved1 = 0;
   sect_data.reserved2 = 0;
+  sect_data.reserved3 = 0;
 
   // LC_SYMTAB
-  symtab_command st = {0};
+  symtab_command st = {};
   st.cmd = 2; // LC_SYMTAB
   st.cmdsize = sizeof(symtab_command);
 
