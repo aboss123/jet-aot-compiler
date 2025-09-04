@@ -166,7 +166,7 @@ else()
   # On Linux, link without C runtime since we use syscalls directly
   add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/generated_exe
-    COMMAND ${CMAKE_C_COMPILER} -nostdlib -nostartfiles -e main -o ${CMAKE_BINARY_DIR}/generated_exe ${GENERATED_S}
+    COMMAND ${CMAKE_CXX_COMPILER} -nostdlib -nostartfiles -e main -o ${CMAKE_BINARY_DIR}/generated_exe ${GENERATED_S}
     DEPENDS ${GENERATED_S}
     COMMENT "Linking generated executable with direct syscalls"
   )
