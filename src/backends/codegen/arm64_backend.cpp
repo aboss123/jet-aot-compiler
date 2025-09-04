@@ -6,7 +6,7 @@ using namespace nextgen::jet::arm64;
 
 namespace CodeGen {
 
-ARM64Backend::ARM64Backend() : next_reg(X0) {
+ARM64Backend::ARM64Backend(TargetPlatform platform) : target_platform(platform), next_reg(X0) {
   assembler = std::make_unique<Assembler>(4096);
 }
 
@@ -675,50 +675,146 @@ size_t ARM64Backend::get_code_size() const {
 }
 
 bool ARM64Backend::write_object(const std::string& path, const std::string& entry_symbol) {
-  if (data_section.empty()) {
-    return macho_builder.write_object(path.c_str(),
-                                     reinterpret_cast<const uint8_t*>(assembler->spill()),
-                                     static_cast<uint32_t>(assembler->bytes()),
-                                     entry_symbol.c_str(),
-                                     0,
-                                     MachOArch::ARM64);
-  } else {
-    // Use relocations for proper adrp/add support
-    std::vector<std::pair<std::string, uint32_t>> all_symbols;
-    all_symbols.push_back({entry_symbol, 0}); // Entry point at offset 0 (already has underscore)
-    all_symbols.insert(all_symbols.end(), data_symbols.begin(), data_symbols.end());
-    
-    return macho_builder.write_object_with_relocations(path.c_str(),
-                                                      reinterpret_cast<const uint8_t*>(assembler->spill()),
-                                                      static_cast<uint32_t>(assembler->bytes()),
-                                                      data_section.data(),
-                                                      static_cast<uint32_t>(data_section.size()),
-                                                      relocations,
-                                                      all_symbols,
-                                                      MachOArch::ARM64);
+  // Choose object file format based on target platform
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      if (data_section.empty()) {
+        return macho_builder.write_object(path.c_str(),
+                                         reinterpret_cast<const uint8_t*>(assembler->spill()),
+                                         static_cast<uint32_t>(assembler->bytes()),
+                                         entry_symbol.c_str(),
+                                         0,
+                                         MachOArch::ARM64);
+      } else {
+        // Use relocations for proper adrp/add support
+        std::vector<std::pair<std::string, uint32_t>> all_symbols;
+        all_symbols.push_back({entry_symbol, 0}); // Entry point at offset 0 (already has underscore)
+        all_symbols.insert(all_symbols.end(), data_symbols.begin(), data_symbols.end());
+        
+        return macho_builder.write_object_with_relocations(path.c_str(),
+                                                          reinterpret_cast<const uint8_t*>(assembler->spill()),
+                                                          static_cast<uint32_t>(assembler->bytes()),
+                                                          data_section.data(),
+                                                          static_cast<uint32_t>(data_section.size()),
+                                                          relocations,
+                                                          all_symbols,
+                                                          MachOArch::ARM64);
+      }
+      
+    case TargetPlatform::LINUX:
+      if (data_section.empty()) {
+        return elf_builder.write_object(path.c_str(),
+                                       reinterpret_cast<const uint8_t*>(assembler->spill()),
+                                       static_cast<uint32_t>(assembler->bytes()),
+                                       entry_symbol.c_str(),
+                                       0,
+                                       ELFArch::ARM64);
+      } else {
+        return elf_builder.write_object_with_data(path.c_str(),
+                                                 reinterpret_cast<const uint8_t*>(assembler->spill()),
+                                                 static_cast<uint32_t>(assembler->bytes()),
+                                                 data_section.data(),
+                                                 static_cast<uint32_t>(data_section.size()),
+                                                 entry_symbol.c_str(),
+                                                 0,
+                                                 ELFArch::ARM64);
+      }
+      
+    case TargetPlatform::WINDOWS:
+      // TODO: Implement PE support
+      std::cerr << "Windows PE support not yet implemented" << std::endl;
+      return false;
+      
+    default:
+      std::cerr << "Unsupported target platform" << std::endl;
+      return false;
   }
 }
 
 bool ARM64Backend::link_executable(const std::string& obj_path, const std::string& exe_path) {
-  std::string cmd = "clang -arch arm64 -e _start -o " + exe_path + " " + obj_path;
-  return system(cmd.c_str()) == 0;
+  std::string cmd;
+  int rc;
+  
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      // Link using system clang for ARM64 Mach-O
+      cmd = "clang -arch arm64 -e _start -o " + exe_path + " " + obj_path;
+      return system(cmd.c_str()) == 0;
+      
+    case TargetPlatform::LINUX:
+      // Link using ld directly for ARM64 ELF executables
+      cmd = std::string("ld -m aarch64linux -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+      rc = std::system(cmd.c_str());
+      if (rc != 0) {
+        // Try with gcc as fallback
+        cmd = std::string("gcc -nostdlib -nostartfiles -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+        rc = std::system(cmd.c_str());
+      }
+      return rc == 0;
+      
+    case TargetPlatform::WINDOWS:
+      // TODO: Implement Windows linking
+      std::cerr << "Windows linking not yet implemented" << std::endl;
+      return false;
+      
+    default:
+      std::cerr << "Unsupported target platform for linking" << std::endl;
+      return false;
+  }
 }
 
 void ARM64Backend::emit_syscall_exit(int32_t code) {
-  assembler->mov_imm(X16, 1);    // SYS_exit
+  uint64_t syscall_number;
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      syscall_number = 1; // Darwin SYS_exit
+      break;
+    case TargetPlatform::LINUX:
+      syscall_number = 93; // Linux SYS_exit
+      break;
+    default:
+      syscall_number = 1; // Default to Darwin
+      break;
+  }
+  
+  assembler->mov_imm(X16, syscall_number);
   assembler->mov_imm(X0, code);  // exit code
   assembler->svc(Imm16(0));      // syscall
 }
 
 void ARM64Backend::emit_syscall_write(const std::string& message) {
-  assembler->mov_imm(X16, 4);    // SYS_write
+  uint64_t syscall_number;
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      syscall_number = 4; // Darwin SYS_write
+      break;
+    case TargetPlatform::LINUX:
+      syscall_number = 64; // Linux SYS_write
+      break;
+    default:
+      syscall_number = 4; // Default to Darwin
+      break;
+  }
+  
+  assembler->mov_imm(X16, syscall_number);
   assembler->mov_imm(X0, 1);     // stdout
   assembler->svc(Imm16(0));      // syscall
 }
 
 void ARM64Backend::emit_syscall(const IR::SyscallInst& inst) {
-  // Darwin syscall number in X16: 0x2000000 | n
-  uint64_t darwin_num = 0x2000000ULL | static_cast<uint64_t>(inst.syscall_number);
+  // Platform-specific syscall number handling
+  uint64_t platform_syscall_number;
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      platform_syscall_number = 0x2000000ULL | static_cast<uint64_t>(inst.syscall_number); // Darwin syscall offset
+      break;
+    case TargetPlatform::LINUX:
+      platform_syscall_number = static_cast<uint64_t>(inst.syscall_number); // Linux syscalls are direct
+      break;
+    default:
+      platform_syscall_number = 0x2000000ULL | static_cast<uint64_t>(inst.syscall_number); // Default to Darwin
+      break;
+  }
 
   // Generic syscall emission (Darwin)
   // Argument registers
@@ -782,7 +878,7 @@ void ARM64Backend::emit_syscall(const IR::SyscallInst& inst) {
   }
 
   // Set syscall number last (after using X16 nowhere else)
-  assembler->mov_imm(X16, darwin_num);
+  assembler->mov_imm(X16, platform_syscall_number);
   assembler->svc(Imm16(0x80));
 }
 

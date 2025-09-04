@@ -2,13 +2,14 @@
 #include "backends/codegen/backend.h"
 #include "assemblers/arm64-codegen.h"
 #include "core/tools/macho_builder.h"
+#include "core/tools/elf_builder.h"
 #include <map>
 
 namespace CodeGen {
 
 class ARM64Backend : public Backend {
 public:
-  ARM64Backend();
+  ARM64Backend(TargetPlatform platform = TargetPlatform::MACOS);
   ~ARM64Backend() override = default;
   
   bool compile_module(const IR::Module& module) override;
@@ -19,11 +20,13 @@ public:
 
 private:
   std::unique_ptr<nextgen::jet::arm64::Assembler> assembler;
+  TargetPlatform target_platform;
   std::vector<uint8_t> data_section;
   std::map<std::string, size_t> string_offsets; // string -> offset in data section
   std::vector<MachOBuilder64::Relocation> relocations;
   std::vector<std::pair<std::string, uint32_t>> data_symbols; // name -> data offset
   MachOBuilder64 macho_builder;
+  ELFBuilder64 elf_builder;
   
   // Label management for control flow
   std::map<std::string, nextgen::jet::arm64::Label> string_labels;

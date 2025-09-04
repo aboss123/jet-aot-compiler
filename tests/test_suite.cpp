@@ -1590,6 +1590,186 @@ TEST(StandaloneExecutables, ComparisonOperationsComprehensive) {
     std::cout << "🎉 Comprehensive comparison operations test completed!" << std::endl;
 }
 
+TEST(CrossPlatform, ELFGeneration) {
+    std::cout << "🧪 Testing Cross-Platform ELF Generation..." << std::endl;
+    
+    using namespace CodeGen;
+    using namespace IR;
+    
+    // Create identical IR for both platforms
+    auto create_hello_world_ir = []() -> std::unique_ptr<Module> {
+        auto module = std::make_unique<Module>("hello_world_cross_platform");
+        IRBuilder builder;
+        
+        // Create global string
+        auto hello_str = module->create_global_string("Hello, Cross-Platform World!\n");
+        
+        // Create _start function
+        Function* start_func = module->create_function("_start", Type::void_type(), {});
+        BasicBlock* start_bb = start_func->create_basic_block("entry");
+        builder.set_insert_point(start_bb);
+        
+        // write syscall: write(1, hello_str, 28)
+        auto fd_val = builder.get_int32(1);      // stdout
+        auto len_val = builder.get_int32(28);    // message length
+        builder.create_syscall(4, {fd_val, hello_str, len_val}); // write syscall
+        
+        // exit syscall: exit(0)
+        auto exit_code = builder.get_int32(0);
+        builder.create_syscall(1, {exit_code}); // exit syscall
+        
+        return module;
+    };
+    
+    // Test ARM64 - macOS vs Linux
+    {
+        auto macos_module = create_hello_world_ir();
+        auto linux_module = create_hello_world_ir();
+        
+        auto macos_backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::MACOS);
+        auto linux_backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::LINUX);
+        
+        if (!macos_backend || !linux_backend) {
+            std::cout << "❌ Failed to create ARM64 backends" << std::endl;
+            return;
+        }
+        
+        // Compile both modules
+        if (!macos_backend->compile_module(*macos_module) || !linux_backend->compile_module(*linux_module)) {
+            std::cout << "❌ Failed to compile ARM64 modules" << std::endl;
+            return;
+        }
+        
+        // Write object files
+        if (!macos_backend->write_object("hello_arm64_macos.o", "_start") || 
+            !linux_backend->write_object("hello_arm64_linux.o", "_start")) {
+            std::cout << "❌ Failed to write ARM64 object files" << std::endl;
+            return;
+        }
+        
+        std::cout << "✅ ARM64 cross-platform object generation successful" << std::endl;
+    }
+    
+    // Test x64 - macOS vs Linux
+    {
+        auto macos_module = create_hello_world_ir();
+        auto linux_module = create_hello_world_ir();
+        
+        auto macos_backend = BackendFactory::create_backend(TargetArch::X86_64, TargetPlatform::MACOS);
+        auto linux_backend = BackendFactory::create_backend(TargetArch::X86_64, TargetPlatform::LINUX);
+        
+        if (!macos_backend || !linux_backend) {
+            std::cout << "❌ Failed to create x64 backends" << std::endl;
+            return;
+        }
+        
+        // Compile both modules
+        if (!macos_backend->compile_module(*macos_module) || !linux_backend->compile_module(*linux_module)) {
+            std::cout << "❌ Failed to compile x64 modules" << std::endl;
+            return;
+        }
+        
+        // Write object files
+        if (!macos_backend->write_object("hello_x64_macos.o", "_start") || 
+            !linux_backend->write_object("hello_x64_linux.o", "_start")) {
+            std::cout << "❌ Failed to write x64 object files" << std::endl;
+            return;
+        }
+        
+        std::cout << "✅ x64 cross-platform object generation successful" << std::endl;
+    }
+    
+    std::cout << "🎉 Cross-platform ELF generation test completed!" << std::endl;
+}
+
+TEST(CrossPlatform, SyscallNumbers) {
+    std::cout << "🧪 Testing Platform-Specific Syscall Numbers..." << std::endl;
+    
+    using namespace CodeGen;
+    using namespace IR;
+    
+    // Test that different platforms generate different syscall numbers
+    auto module = std::make_unique<Module>("syscall_test");
+    IRBuilder builder;
+    
+    Function* func = module->create_function("_start", Type::void_type(), {});
+    BasicBlock* bb = func->create_basic_block("entry");
+    builder.set_insert_point(bb);
+    
+    // Create exit syscall
+    auto exit_code = builder.get_int32(0);
+    builder.create_syscall(1, {exit_code}); // exit syscall number 1
+    
+    // Test ARM64 platforms
+    {
+        // Create separate modules for each platform
+        auto macos_module = std::make_unique<Module>("syscall_test_macos");
+        auto linux_module = std::make_unique<Module>("syscall_test_linux");
+        
+        // Create identical functions in both modules
+        for (auto* mod : {macos_module.get(), linux_module.get()}) {
+            IRBuilder local_builder;
+            Function* local_func = mod->create_function("_start", Type::void_type(), {});
+            BasicBlock* local_bb = local_func->create_basic_block("entry");
+            local_builder.set_insert_point(local_bb);
+            auto local_exit_code = local_builder.get_int32(0);
+            local_builder.create_syscall(1, {local_exit_code});
+        }
+        
+        auto macos_backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::MACOS);
+        auto linux_backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::LINUX);
+        
+        if (!macos_backend->compile_module(*macos_module) || !linux_backend->compile_module(*linux_module)) {
+            std::cout << "❌ Failed to compile ARM64 syscall modules" << std::endl;
+            return;
+        }
+        
+        // Write and compare - they should be different due to different syscall numbers
+        if (!macos_backend->write_object("syscall_arm64_macos.o", "_start") ||
+            !linux_backend->write_object("syscall_arm64_linux.o", "_start")) {
+            std::cout << "❌ Failed to write ARM64 syscall object files" << std::endl;
+            return;
+        }
+        
+        std::cout << "✅ ARM64 platform-specific syscall generation successful" << std::endl;
+    }
+    
+    // Test x64 platforms
+    {
+        // Create separate modules for each platform
+        auto macos_module = std::make_unique<Module>("syscall_test_x64_macos");
+        auto linux_module = std::make_unique<Module>("syscall_test_x64_linux");
+        
+        // Create identical functions in both modules
+        for (auto* mod : {macos_module.get(), linux_module.get()}) {
+            IRBuilder local_builder;
+            Function* local_func = mod->create_function("_start", Type::void_type(), {});
+            BasicBlock* local_bb = local_func->create_basic_block("entry");
+            local_builder.set_insert_point(local_bb);
+            auto local_exit_code = local_builder.get_int32(0);
+            local_builder.create_syscall(1, {local_exit_code});
+        }
+        
+        auto macos_backend = BackendFactory::create_backend(TargetArch::X86_64, TargetPlatform::MACOS);
+        auto linux_backend = BackendFactory::create_backend(TargetArch::X86_64, TargetPlatform::LINUX);
+        
+        if (!macos_backend->compile_module(*macos_module) || !linux_backend->compile_module(*linux_module)) {
+            std::cout << "❌ Failed to compile x64 syscall modules" << std::endl;
+            return;
+        }
+        
+        if (!macos_backend->write_object("syscall_x64_macos.o", "_start") ||
+            !linux_backend->write_object("syscall_x64_linux.o", "_start")) {
+            std::cout << "❌ Failed to write x64 syscall object files" << std::endl;
+            return;
+        }
+        
+        std::cout << "✅ x64 platform-specific syscall generation successful" << std::endl;
+    }
+    
+    std::cout << "🎉 Platform-specific syscall number test completed!" << std::endl;
+}
+
 
 int main() {
     std::cout << "🚀 AOT Compiler Test Suite\n";

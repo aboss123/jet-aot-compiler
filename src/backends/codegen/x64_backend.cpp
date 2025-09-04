@@ -10,7 +10,7 @@ using namespace nextgen::jet::x64;
 
 namespace CodeGen {
 
-X64Backend::X64Backend() : next_reg(AX), use_advanced_allocation(false) {
+X64Backend::X64Backend(TargetPlatform platform) : target_platform(platform), next_reg(AX), use_advanced_allocation(false) {
   assembler = std::make_unique<Assembler>(4096);
   
   // Initialize register allocator with x64 register set
@@ -1177,8 +1177,7 @@ size_t X64Backend::get_code_size() const {
 }
 
 bool X64Backend::write_object(const std::string& path, const std::string& entry_symbol) {
-  // For x86_64, emit a Mach-O object (.o) with our code and embedded string bytes bound to labels
-  // Place string labels at the end of the code (inline data pool), then emit .o
+  // Place string labels at the end of the code (inline data pool)
   for (auto& [str_content, label] : string_labels) {
     assembler->place_label(label);
     for (char c : str_content) {
@@ -1187,38 +1186,114 @@ bool X64Backend::write_object(const std::string& path, const std::string& entry_
     assembler->emit_u8(0); // null terminator
   }
 
-  return macho_builder.write_object(
-    path.c_str(),
-    reinterpret_cast<const uint8_t*>(assembler->spill()),
-    static_cast<uint32_t>(assembler->bytes()),
-    entry_symbol.c_str(),
-    0,
-    MachOArch::X86_64
-  );
+  // Choose object file format based on target platform
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      return macho_builder.write_object(
+        path.c_str(),
+        reinterpret_cast<const uint8_t*>(assembler->spill()),
+        static_cast<uint32_t>(assembler->bytes()),
+        entry_symbol.c_str(),
+        0,
+        MachOArch::X86_64
+      );
+      
+    case TargetPlatform::LINUX:
+      return elf_builder.write_object(
+        path.c_str(),
+        reinterpret_cast<const uint8_t*>(assembler->spill()),
+        static_cast<uint32_t>(assembler->bytes()),
+        entry_symbol.c_str(),
+        0,
+        ELFArch::X86_64
+      );
+      
+    case TargetPlatform::WINDOWS:
+      // TODO: Implement PE support
+      std::cerr << "Windows PE support not yet implemented" << std::endl;
+      return false;
+      
+    default:
+      std::cerr << "Unsupported target platform" << std::endl;
+      return false;
+  }
 }
 
 bool X64Backend::link_executable(const std::string& obj_path, const std::string& exe_path) {
-  // Link using system clang to produce a proper Mach-O executable with LC_MAIN
-  // Use _start as entry and disable PIE for simple syscall-only binaries
-  std::string cmd = std::string("clang -arch x86_64 -e _start -Wl,-no_pie -o ") + exe_path + " " + obj_path + " 2>/dev/null";
-  int rc = std::system(cmd.c_str());
-  if (rc != 0) {
-    // Retry without -Wl,-no_pie (in case toolchain rejects it)
-    std::string cmd2 = std::string("clang -arch x86_64 -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
-    rc = std::system(cmd2.c_str());
+  std::string cmd;
+  int rc;
+  
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      // Link using system clang to produce a proper Mach-O executable with LC_MAIN
+      // Use _start as entry and disable PIE for simple syscall-only binaries
+      cmd = std::string("clang -arch x86_64 -e _start -Wl,-no_pie -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+      rc = std::system(cmd.c_str());
+      if (rc != 0) {
+        // Retry without -Wl,-no_pie (in case toolchain rejects it)
+        std::string cmd2 = std::string("clang -arch x86_64 -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+        rc = std::system(cmd2.c_str());
+      }
+      return rc == 0;
+      
+    case TargetPlatform::LINUX:
+      // Link using ld directly for ELF executables
+      // Use _start as entry point (standard for Linux executables without C runtime)
+      cmd = std::string("ld -m elf_x86_64 -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+      rc = std::system(cmd.c_str());
+      if (rc != 0) {
+        // Try with gcc as fallback
+        cmd = std::string("gcc -nostdlib -nostartfiles -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+        rc = std::system(cmd.c_str());
+      }
+      return rc == 0;
+      
+    case TargetPlatform::WINDOWS:
+      // TODO: Implement Windows linking
+      std::cerr << "Windows linking not yet implemented" << std::endl;
+      return false;
+      
+    default:
+      std::cerr << "Unsupported target platform for linking" << std::endl;
+      return false;
   }
-  return rc == 0;
 }
 
 void X64Backend::emit_syscall_exit(int32_t code) {
-  assembler->movq(AX, Imm64{0x2000001ULL}); // SYS_exit
+  uint64_t syscall_number;
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      syscall_number = 0x2000001ULL; // Darwin SYS_exit
+      break;
+    case TargetPlatform::LINUX:
+      syscall_number = 60ULL; // Linux SYS_exit
+      break;
+    default:
+      syscall_number = 0x2000001ULL; // Default to Darwin
+      break;
+  }
+  
+  assembler->movq(AX, Imm64{syscall_number});
   assembler->movq(DI, Imm64{static_cast<uint64_t>(code)});
   assembler->syscall();
 }
 
 void X64Backend::emit_syscall_write(const std::string& message) {
+  uint64_t syscall_number;
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      syscall_number = 0x2000004ULL; // Darwin SYS_write
+      break;
+    case TargetPlatform::LINUX:
+      syscall_number = 1ULL; // Linux SYS_write
+      break;
+    default:
+      syscall_number = 0x2000004ULL; // Default to Darwin
+      break;
+  }
+  
   // Implementation would emit string data and syscall
-  assembler->movq(AX, Imm64{0x2000004ULL}); // SYS_write
+  assembler->movq(AX, Imm64{syscall_number});
   assembler->movq(DI, Imm64{1}); // stdout
   assembler->syscall();
 }
@@ -1289,7 +1364,20 @@ void X64Backend::emit_syscall(uint32_t syscall_number, const std::vector<std::sh
   }
 
   // Now set syscall number (after using AX for any arg materialization)
-  assembler->movq(AX, Imm64{0x2000000ULL | (uint64_t)syscall_number});
+  uint64_t platform_syscall_number;
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      platform_syscall_number = 0x2000000ULL | (uint64_t)syscall_number; // Darwin syscall offset
+      break;
+    case TargetPlatform::LINUX:
+      platform_syscall_number = (uint64_t)syscall_number; // Linux syscalls are direct
+      break;
+    default:
+      platform_syscall_number = 0x2000000ULL | (uint64_t)syscall_number; // Default to Darwin
+      break;
+  }
+  
+  assembler->movq(AX, Imm64{platform_syscall_number});
   assembler->syscall();
 }
 

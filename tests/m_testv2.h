@@ -368,25 +368,25 @@ void mtest_##SUITE##TEST_NAME(); \
 static AddStuff stuff_##SUITE##TEST_NAME(#SUITE, #TEST_NAME, mtest_##SUITE##TEST_NAME); \
 void mtest_##SUITE##TEST_NAME() \
 
-#define ASSERT_EXPECT(a, b, error) ((a == b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_EQ("#a", "#b", "#error");", __LINE__, error, true, true)))
-#define ASSERT_EQ(a, b, error) ((a == b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_EQ("#a", "#b", "#error");", __LINE__, error, true)))
-#define ASSERT_NE(a, b, error) ((a != b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_NE("#a", "#b", "#error");", __LINE__, error, true)))
-#define ASSERT_LT(a, b, error) ((a < b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_LT("#a", "#b", "#error");", __LINE__, error, true)))
-#define ASSERT_GT(a, b, error) ((a > b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_GT("#a", "#b", "#error");", __LINE__, error, true)))
-#define ASSERT_LTE(a, b, error) ((a <= b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_LTE("#a", "#b", "#error");", __LINE__, error, true)))
-#define ASSERT_GTE(a, b, error) ((a >= b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_GTE("#a", "#b", "#error");", __LINE__, error, true)))
-#define ASSERT_TRUE(a, error) ((a == true) ? ({}) : (Unit.AddDiagnostic(a, "null", __FILE__, "ASSERT_TRUE("#a", "#error");", __LINE__, error, true)))
-#define ASSERT_FALSE(a, error) ((a == false) ? ({}) : (Unit.AddDiagnostic(a, "null", __FILE__, "ASSERT_FALSE("#a", "#error");", __LINE__, error, true)))
+#define ASSERT_EXPECT(a, b, error) ((a == b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_EQ("#a", "#b", "#error");", __LINE__, error, true, true)))
+#define ASSERT_EQ(a, b, error) ((a == b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_EQ("#a", "#b", "#error");", __LINE__, error, true)))
+#define ASSERT_NE(a, b, error) ((a != b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_NE("#a", "#b", "#error");", __LINE__, error, true)))
+#define ASSERT_LT(a, b, error) ((a < b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_LT("#a", "#b", "#error");", __LINE__, error, true)))
+#define ASSERT_GT(a, b, error) ((a > b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_GT("#a", "#b", "#error");", __LINE__, error, true)))
+#define ASSERT_LTE(a, b, error) ((a <= b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_LTE("#a", "#b", "#error");", __LINE__, error, true)))
+#define ASSERT_GTE(a, b, error) ((a >= b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "ASSERT_GTE("#a", "#b", "#error");", __LINE__, error, true)))
+#define ASSERT_TRUE(a, error) ((a == true) ? (void)0 : (Unit.AddDiagnostic(a, "null", __FILE__, "ASSERT_TRUE("#a", "#error");", __LINE__, error, true)))
+#define ASSERT_FALSE(a, error) ((a == false) ? (void)0 : (Unit.AddDiagnostic(a, "null", __FILE__, "ASSERT_FALSE("#a", "#error");", __LINE__, error, true)))
 
-#define CHECK_EXPECT(a, b, error) ((a == b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_EXPECT("#a", "#b", "#error");", __LINE__, error, false, true)))
-#define CHECK_EQ(a, b, error) ((a == b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_EQ("#a", "#b", "#error");", __LINE__, error, false)))
-#define CHECK_NE(a, b, error) ((a != b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_NE("#a", "#b", "#error");", __LINE__, error, false)))
-#define CHECK_LT(a, b, error) ((a < b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_LT("#a", "#b", "#error");", __LINE__, error, false)))
-#define CHECK_GT(a, b, error) ((a > b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_GT("#a", "#b", "#error");", __LINE__, error, false)))
-#define CHECK_LTE(a, b, error) ((a <= b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_LTE("#a", "#b", "#error");", __LINE__, error, false)))
-#define CHECK_GTE(a, b, error) ((a >= b) ? ({}) : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_GTE("#a", "#b", "#error");", __LINE__, error, false)))
-#define CHECK_TRUE(a, error) ((a == true) ? ({}) : (Unit.AddDiagnostic(a, "null", __FILE__, "CHECK_TRUE("#a", "#error");", __LINE__, error, false)))
-#define CHECK_FALSE(a, error) ((a == false) ? ({}) : (Unit.AddDiagnostic(a, "null", __FILE__, "CHECK_FALSE("#a", "#error");", __LINE__, error, false)))
+#define CHECK_EXPECT(a, b, error) ((a == b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_EXPECT("#a", "#b", "#error");", __LINE__, error, false, true)))
+#define CHECK_EQ(a, b, error) ((a == b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_EQ("#a", "#b", "#error");", __LINE__, error, false)))
+#define CHECK_NE(a, b, error) ((a != b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_NE("#a", "#b", "#error");", __LINE__, error, false)))
+#define CHECK_LT(a, b, error) ((a < b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_LT("#a", "#b", "#error");", __LINE__, error, false)))
+#define CHECK_GT(a, b, error) ((a > b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_GT("#a", "#b", "#error");", __LINE__, error, false)))
+#define CHECK_LTE(a, b, error) ((a <= b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_LTE("#a", "#b", "#error");", __LINE__, error, false)))
+#define CHECK_GTE(a, b, error) ((a >= b) ? (void)0 : (Unit.AddDiagnostic(a, b, __FILE__, "CHECK_GTE("#a", "#b", "#error");", __LINE__, error, false)))
+#define CHECK_TRUE(a, error) ((a == true) ? (void)0 : (Unit.AddDiagnostic(a, "null", __FILE__, "CHECK_TRUE("#a", "#error");", __LINE__, error, false)))
+#define CHECK_FALSE(a, error) ((a == false) ? (void)0 : (Unit.AddDiagnostic(a, "null", __FILE__, "CHECK_FALSE("#a", "#error");", __LINE__, error, false)))
 
 
 #   endif //MINT_M_TESTV2_H

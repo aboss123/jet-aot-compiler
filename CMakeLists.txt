@@ -53,6 +53,12 @@ add_library(macho_builder STATIC
 )
 target_include_directories(macho_builder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# ELF Builder Library
+add_library(elf_builder STATIC 
+    src/core/tools/elf_builder.cpp
+)
+target_include_directories(elf_builder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 # Module System Libraries
 add_library(module_emitter STATIC 
     src/core/tools/module_emitter.cpp
@@ -76,7 +82,7 @@ add_library(backend STATIC
     src/backends/codegen/x64_backend.cpp 
     src/backends/codegen/arm64_backend.cpp
 )
-target_link_libraries(backend PRIVATE ir x64_assembler arm64_assembler macho_builder)
+target_link_libraries(backend PRIVATE ir x64_assembler arm64_assembler macho_builder elf_builder)
 target_include_directories(backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Register Allocator and Optimization Library

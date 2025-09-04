@@ -4,6 +4,7 @@
 #include "backends/codegen/x64_register_set.h"
 #include "assemblers/x64-codegen.h"
 #include "core/tools/macho_builder.h"
+#include "core/tools/elf_builder.h"
 #include <map>
 #include <memory>
 
@@ -15,7 +16,7 @@ class X64RegisterSet;
 
 class X64Backend : public Backend {
 public:
-  X64Backend();
+  X64Backend(TargetPlatform platform = TargetPlatform::MACOS);
   ~X64Backend() override = default;
   
   bool compile_module(const IR::Module& module) override;
@@ -26,7 +27,9 @@ public:
 
 private:
   std::unique_ptr<nextgen::jet::x64::Assembler> assembler;
+  TargetPlatform target_platform;
   MachOBuilder64 macho_builder;
+  ELFBuilder64 elf_builder;
   
   // Register allocation
   std::unique_ptr<RegisterAllocator> register_allocator;

@@ -25,12 +25,15 @@ public:
 
 // Factory for creating backends
 enum class TargetArch { X86_64, ARM64 };
+enum class TargetPlatform { MACOS, LINUX, WINDOWS };
 
 class BackendFactory {
 public:
-  static std::unique_ptr<Backend> create_backend(TargetArch arch);
+  static std::unique_ptr<Backend> create_backend(TargetArch arch, TargetPlatform platform = get_native_platform());
   static TargetArch get_native_arch();
+  static TargetPlatform get_native_platform();
   static std::string arch_to_string(TargetArch arch);
+  static std::string platform_to_string(TargetPlatform platform);
 };
 
 } // namespace CodeGen
