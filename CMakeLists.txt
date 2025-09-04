@@ -158,17 +158,29 @@ add_custom_command(
 )
 
 # Create executable with platform-specific linking
-if(APPLE)
+# Skip generated assembly target when cross-compiling
+if(CMAKE_CROSSCOMPILING)
+  message(STATUS "Cross-compiling detected - skipping generated assembly target")
+elseif(APPLE)
   add_executable(generated ${GENERATED_S})
   add_dependencies(generated emit_exe)
   set_target_properties(generated PROPERTIES XCODE_ATTRIBUTE_ARCHS "x86_64")
 else()
   # On Linux, link without C runtime since we use syscalls directly
+  # Use a more robust approach to find the compiler
+  if(CMAKE_C_COMPILER)
+    set(ASM_COMPILER ${CMAKE_C_COMPILER})
+  elseif(CMAKE_CXX_COMPILER)
+    set(ASM_COMPILER ${CMAKE_CXX_COMPILER})
+  else()
+    find_program(ASM_COMPILER NAMES gcc clang cc)
+  endif()
+  
   add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/generated_exe
-    COMMAND ${CMAKE_C_COMPILER} -nostdlib -nostartfiles -e main -o ${CMAKE_BINARY_DIR}/generated_exe ${GENERATED_S}
+    COMMAND ${ASM_COMPILER} -nostdlib -nostartfiles -e main -o ${CMAKE_BINARY_DIR}/generated_exe ${GENERATED_S}
     DEPENDS ${GENERATED_S}
-    COMMENT "Linking generated executable with direct syscalls"
+    COMMENT "Linking generated executable with direct syscalls using ${ASM_COMPILER}"
   )
   add_custom_target(generated ALL DEPENDS ${CMAKE_BINARY_DIR}/generated_exe)
 endif()

@@ -1242,8 +1242,18 @@ bool X64Backend::link_executable(const std::string& obj_path, const std::string&
       cmd = std::string("ld -m elf_x86_64 -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
       rc = std::system(cmd.c_str());
       if (rc != 0) {
+        // Try alternative ld command format
+        cmd = std::string("ld -m i386:x86-64 -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+        rc = std::system(cmd.c_str());
+      }
+      if (rc != 0) {
         // Try with gcc as fallback
         cmd = std::string("gcc -nostdlib -nostartfiles -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
+        rc = std::system(cmd.c_str());
+      }
+      if (rc != 0) {
+        // Try with clang as final fallback
+        cmd = std::string("clang -nostdlib -nostartfiles -e _start -o ") + exe_path + " " + obj_path + " 2>/dev/null";
         rc = std::system(cmd.c_str());
       }
       return rc == 0;

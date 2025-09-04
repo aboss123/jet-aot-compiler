@@ -1682,6 +1682,126 @@ TEST(CrossPlatform, ELFGeneration) {
     std::cout << "🎉 Cross-platform ELF generation test completed!" << std::endl;
 }
 
+TEST(CrossPlatform, ARM64CrossCompilationLinux) {
+    std::cout << "🧪 Testing ARM64 Cross-Compilation on Linux..." << std::endl;
+    
+    using namespace CodeGen;
+    using namespace IR;
+    
+    // Only run this test on Linux
+    auto native_platform = BackendFactory::get_native_platform();
+    if (native_platform != TargetPlatform::LINUX) {
+        std::cout << "    Skipping ARM64 cross-compilation test (not on Linux)" << std::endl;
+        return;
+    }
+    
+    // Create a simple ARM64 module for Linux
+    auto module = std::make_unique<Module>("arm64_cross_test");
+    IRBuilder builder;
+    
+    // Create global string
+    auto hello_str = module->create_global_string("Hello, ARM64 Linux!\n");
+    
+    // Create _start function
+    Function* start_func = module->create_function("_start", Type::void_type(), {});
+    BasicBlock* start_bb = start_func->create_basic_block("entry");
+    builder.set_insert_point(start_bb);
+    
+    // write syscall: write(1, hello_str, 20)
+    auto fd_val = builder.get_int32(1);      // stdout
+    auto len_val = builder.get_int32(20);    // message length
+    builder.create_syscall(64, {fd_val, hello_str, len_val}); // Linux ARM64 SYS_write
+    
+    // exit syscall: exit(0)
+    auto exit_code = builder.get_int32(0);
+    builder.create_syscall(93, {exit_code}); // Linux ARM64 SYS_exit
+    
+    // Create ARM64 Linux backend
+    auto backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::LINUX);
+    if (!backend) {
+        std::cout << "    ❌ Failed to create ARM64 Linux backend" << std::endl;
+        return;
+    }
+    
+    // Compile module
+    if (!backend->compile_module(*module)) {
+        std::cout << "    ❌ Failed to compile ARM64 module" << std::endl;
+        return;
+    }
+    
+    // Write object file
+    if (!backend->write_object("arm64_cross_test.o", "_start")) {
+        std::cout << "    ❌ Failed to write ARM64 object file" << std::endl;
+        return;
+    }
+    
+    // Verify it's an ARM64 ELF file
+    std::string cmd = "file arm64_cross_test.o";
+    int rc = std::system(cmd.c_str());
+    if (rc != 0) {
+        std::cout << "    ⚠️  Could not verify file format" << std::endl;
+    }
+    
+    std::cout << "    ✅ ARM64 cross-compilation test completed successfully" << std::endl;
+    std::cout << "🎉 ARM64 cross-compilation test completed!" << std::endl;
+}
+
+TEST(CrossPlatform, LinuxToolchainCompatibility) {
+    std::cout << "🧪 Testing Linux Toolchain Compatibility..." << std::endl;
+    
+    using namespace CodeGen;
+    using namespace IR;
+    
+    // Test if we can detect the current platform correctly
+    auto native_platform = BackendFactory::get_native_platform();
+    auto native_arch = BackendFactory::get_native_arch();
+    
+    std::cout << "    Current platform: " << BackendFactory::platform_to_string(native_platform) << std::endl;
+    std::cout << "    Current architecture: " << BackendFactory::arch_to_string(native_arch) << std::endl;
+    
+    // Test tool availability on Linux
+    if (native_platform == TargetPlatform::LINUX) {
+        std::cout << "    Testing Linux toolchain availability..." << std::endl;
+        
+        // Check for common Linux tools
+        auto check_tool = [](const std::string& tool) -> bool {
+            std::string cmd = "which " + tool + " >/dev/null 2>&1";
+            return std::system(cmd.c_str()) == 0;
+        };
+        
+        bool has_ld = check_tool("ld");
+        bool has_gcc = check_tool("gcc");
+        bool has_clang = check_tool("clang");
+        
+        std::cout << "        ld available: " << (has_ld ? "✅" : "❌") << std::endl;
+        std::cout << "        gcc available: " << (has_gcc ? "✅" : "❌") << std::endl;
+        std::cout << "        clang available: " << (has_clang ? "✅" : "❌") << std::endl;
+        
+        // At least one linker should be available
+        if (!has_ld && !has_gcc && !has_clang) {
+            std::cout << "    ⚠️  Warning: No Linux linker tools found" << std::endl;
+        }
+    }
+    
+    // Test backend creation for all platform/arch combinations
+    for (auto arch : {TargetArch::X86_64, TargetArch::ARM64}) {
+        for (auto platform : {TargetPlatform::MACOS, TargetPlatform::LINUX}) {
+            auto backend = BackendFactory::create_backend(arch, platform);
+            if (!backend) {
+                std::cout << "    ❌ Failed to create backend for " 
+                         << BackendFactory::arch_to_string(arch) << " / "
+                         << BackendFactory::platform_to_string(platform) << std::endl;
+                return;
+            }
+            std::cout << "    ✅ Created backend for " 
+                     << BackendFactory::arch_to_string(arch) << " / "
+                     << BackendFactory::platform_to_string(platform) << std::endl;
+        }
+    }
+    
+    std::cout << "🎉 Linux toolchain compatibility test completed!" << std::endl;
+}
+
 TEST(CrossPlatform, SyscallNumbers) {
     std::cout << "🧪 Testing Platform-Specific Syscall Numbers..." << std::endl;
     

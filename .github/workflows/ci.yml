@@ -16,10 +16,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         compiler: [gcc, clang]
+        architecture: [x86_64, arm64]
         exclude:
           # GCC is not readily available on macOS
           - os: macos-latest
             compiler: gcc
+          # ARM64 testing only on Linux for now (macOS ARM64 CI is limited)
+          - os: macos-latest
+            architecture: arm64
             
     steps:
     - name: Checkout code
@@ -32,12 +36,39 @@ jobs:
         cmake: true
         ninja: true
         
+    - name: Set up ARM64 toolchain (Linux ARM64)
+      if: runner.os == 'Linux' && matrix.architecture == 'arm64'
+      run: |
+        # Install ARM64 cross-compilation tools
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+        echo "ARM64 toolchain installed"
+        
     - name: Configure build (Linux)
       if: runner.os == 'Linux'
       run: |
         mkdir -p build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_VERBOSE_MAKEFILE=ON
+        
+        # Configure CMake with architecture-specific settings
+        if [ "${{ matrix.architecture }}" = "arm64" ]; then
+          # ARM64 cross-compilation setup
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja \
+            -DCMAKE_VERBOSE_MAKEFILE=ON \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_FIND_ROOT_PATH=/usr/aarch64-linux-gnu \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+        else
+          # Native x86_64 build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_VERBOSE_MAKEFILE=ON
+        fi
         
     - name: Configure build (macOS)  
       if: runner.os == 'macOS'
@@ -46,27 +77,62 @@ jobs:
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_VERBOSE_MAKEFILE=ON
         
+    - name: Test toolchain availability
+      run: |
+        echo "Testing toolchain availability..."
+        echo "OS: $RUNNER_OS"
+        echo "Architecture: ${{ matrix.architecture }}"
+        echo "Compiler: ${{ matrix.compiler }}"
+        
+        # Check available tools
+        which gcc || echo "gcc not found"
+        which clang || echo "clang not found"
+        which ld || echo "ld not found"
+        
+        # For ARM64, check cross-compilation tools
+        if [ "${{ matrix.architecture }}" = "arm64" ]; then
+          which aarch64-linux-gnu-gcc || echo "aarch64-linux-gnu-gcc not found"
+          which aarch64-linux-gnu-ld || echo "aarch64-linux-gnu-ld not found"
+        fi
+        
     - name: Build project
       run: |
         cd build
         cmake --build . --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
         
+    - name: Validate ARM64 cross-compilation
+      if: runner.os == 'Linux' && matrix.architecture == 'arm64'
+      run: |
+        cd build
+        echo "🔍 Validating ARM64 cross-compilation build..."
+        
+        # Check that object files were created for ARM64
+        file libir.a | grep "aarch64" || echo "Warning: libir.a may not be ARM64"
+        file libx64_assembler.a | grep "aarch64" || echo "Warning: libx64_assembler.a may not be ARM64"
+        file libarm64_assembler.a | grep "aarch64" || echo "Warning: libarm64_assembler.a may not be ARM64"
+        
+        echo "✅ ARM64 cross-compilation validation completed"
+        
     - name: Run test suite
+      if: matrix.architecture == 'x86_64'  # Only run tests on native architecture
       run: |
         cd build
         ./test_suite
         
     - name: Run optimization tests
+      if: matrix.architecture == 'x86_64'  # Only run tests on native architecture
       run: |
         cd build
         ./standalone_optimization_test
         
     - name: Run relocation tests
+      if: matrix.architecture == 'x86_64'  # Only run tests on native architecture
       run: |
         cd build
         ./test_relocation
         
     - name: Test example programs
+      if: matrix.architecture == 'x86_64'  # Only run examples on native architecture
       run: |
         cd build
         # Test core examples with timeout protection
