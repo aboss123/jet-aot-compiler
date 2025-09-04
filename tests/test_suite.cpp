@@ -129,19 +129,19 @@ TEST(IR, IRDumperFormats) {
     
     // Test different dump formats
     std::string human_readable = IRDumper::dump_module(module, IRDumper::DumpFormat::HUMAN_READABLE);
-    ASSERT_TRUE((human_readable.find("Module: dump_test") != std::string::npos), "Human readable should contain module name");
-    ASSERT_TRUE((human_readable.find("test_func") != std::string::npos), "Should contain function name");
+    ASSERT_TRUE(human_readable.find("Module: dump_test") != std::string::npos, "Human readable should contain module name");
+    ASSERT_TRUE(human_readable.find("test_func") != std::string::npos, "Should contain function name");
     
     std::string llvm_style = IRDumper::dump_module(module, IRDumper::DumpFormat::LLVM_STYLE);
-    ASSERT_TRUE((llvm_style.find("define i32 @test_func") != std::string::npos), "LLVM style should have proper function signature");
+    ASSERT_TRUE(llvm_style.find("define i32 @test_func") != std::string::npos, "LLVM style should have proper function signature");
     
     std::string compact = IRDumper::dump_module(module, IRDumper::DumpFormat::COMPACT);
-    ASSERT_TRUE((compact.find("module dump_test") != std::string::npos), "Compact should contain module declaration");
+    ASSERT_TRUE(compact.find("module dump_test") != std::string::npos, "Compact should contain module declaration");
     
     // Test with debug info
     IRDumper::set_show_ids(true);
     std::string debug = IRDumper::dump_module(module, IRDumper::DumpFormat::DEBUG);
-    ASSERT_TRUE((debug.find("(id:") != std::string::npos), "Debug format should show IDs");
+    ASSERT_TRUE(debug.find("(id:") != std::string::npos, "Debug format should show IDs");
     IRDumper::set_show_ids(false);
 }
 
@@ -201,8 +201,8 @@ TEST(IR, IRAnalyzerStatistics) {
     
     // Test statistics string
     std::string stats_str = stats.to_string();
-    ASSERT_TRUE((stats_str.find("Module Statistics:") != std::string::npos), "Should contain statistics header");
-    ASSERT_TRUE((stats_str.find("Functions: 1") != std::string::npos), "Should show function count");
+    ASSERT_TRUE(stats_str.find("Module Statistics:") != std::string::npos, "Should contain statistics header");
+    ASSERT_TRUE(stats_str.find("Functions: 1") != std::string::npos, "Should show function count");
 }
 
 TEST(IR, AtomicOperationsDumping) {
@@ -221,12 +221,12 @@ TEST(IR, AtomicOperationsDumping) {
     
     // Test dumping atomic operations
     std::string dumped = IRDumper::dump_function(*func, IRDumper::DumpFormat::HUMAN_READABLE);
-    ASSERT_TRUE((dumped.find("atomic_load") != std::string::npos), "Should contain atomic_load");
-    ASSERT_TRUE((dumped.find("atomic_store") != std::string::npos), "Should contain atomic_store");
+    ASSERT_TRUE(dumped.find("atomic_load") != std::string::npos, "Should contain atomic_load");
+    ASSERT_TRUE(dumped.find("atomic_store") != std::string::npos, "Should contain atomic_store");
     
     // Test LLVM-style format
     std::string llvm_dumped = IRDumper::dump_function(*func, IRDumper::DumpFormat::LLVM_STYLE);
-    ASSERT_TRUE((llvm_dumped.find("atomic_load") != std::string::npos), "LLVM format should contain atomic operations");
+    ASSERT_TRUE(llvm_dumped.find("atomic_load") != std::string::npos, "LLVM format should contain atomic operations");
     
     // Validate atomic operations
     auto errors = SafetyChecker::validate_function_detailed(*func);
@@ -558,8 +558,8 @@ TEST(AOTCompiler, GenericSyscallHandling_ARM64) {
     // Test execution with input
     std::string test_cmd = "echo 'Hello' | " + exe_path;
     std::string output = TestUtils::capture_output(test_cmd);
-    ASSERT_TRUE((output.find("Result: ") != std::string::npos), "Should contain result prefix");
-    ASSERT_TRUE((output.find("Hello") != std::string::npos), "Should echo input");
+    ASSERT_TRUE(output.find("Result: ") != std::string::npos, "Should contain result prefix");
+    ASSERT_TRUE(output.find("Hello") != std::string::npos, "Should echo input");
 }
 
 TEST(AOTCompiler, GenericSyscallHandling_X86_64) {
@@ -614,8 +614,8 @@ TEST(AOTCompiler, GenericSyscallHandling_X86_64) {
     // Test execution
     std::string test_cmd = "echo 'Test' | " + exe_path;
     std::string output = TestUtils::capture_output(test_cmd);
-    ASSERT_TRUE((output.find("Echo: ") != std::string::npos), "Should contain echo prefix");
-    ASSERT_TRUE((output.find("Test") != std::string::npos), "Should echo input");
+    ASSERT_TRUE(output.find("Echo: ") != std::string::npos, "Should contain echo prefix");
+    ASSERT_TRUE(output.find("Test") != std::string::npos, "Should echo input");
 }
 
 TEST(AOTCompiler, CrossArchitectureCompatibility) {
