@@ -19,6 +19,9 @@ public:
   // Write to object file
   virtual bool write_object(const std::string& path, const std::string& entry_symbol = "main") = 0;
   
+  // Write to executable file (direct, without linking)
+  virtual bool write_executable(const std::string& path, const std::string& entry_symbol = "main") = 0;
+  
   // Link to executable (via system linker)
   virtual bool link_executable(const std::string& obj_path, const std::string& exe_path) = 0;
 };

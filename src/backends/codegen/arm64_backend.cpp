@@ -25,7 +25,13 @@ bool ARM64Backend::compile_module(const IR::Module& module) {
     }
 
     if (mainFunc != nullptr) {
-      // Generate minimal _start that directly inlines main's body (no function call overhead)
+      // Generate minimal _start with proper ARM64 initialization
+      // Initialize frame pointer to zero for minimal ELF execution
+      assembler->mov_reg(FP, XZR);
+      // Stack pointer should already be aligned by kernel, but ensure it for ARM64 ABI
+      // Note: Skipping explicit alignment since and_imm isn't implemented
+      
+      // Inline main's body directly
       for (const auto& bb : mainFunc->basic_blocks) {
         compile_basic_block(*bb);
       }
@@ -58,13 +64,16 @@ void ARM64Backend::compile_function(const IR::Function& func) {
     return;
   }
   
-  // Generic function prologue/epilogue for non-main functions
-  assembler->stp(FP, LR, SP, -16);
-  // Keep FP at zero in our bare-metal entry to match minimal _start
+  // Generic function prologue/epilogue for non-main functions with proper ARM64 stack frame
+  assembler->stp(FP, LR, SP, -16); // Pre-decrement stack and save FP/LR
+  assembler->mov_reg(FP, SP); // Set frame pointer to current stack
+  
   for (const auto& bb : func.basic_blocks) {
     compile_basic_block(*bb);
   }
-  assembler->ldp(FP, LR, SP, 16);
+  
+  assembler->mov_reg(SP, FP); // Restore stack pointer
+  assembler->ldp(FP, LR, SP, 16); // Post-increment and restore FP/LR
   assembler->ret();
 }
 
@@ -402,7 +411,8 @@ void ARM64Backend::compile_instruction(const IR::Instruction& inst) {
         auto ret_reg = get_operand_register(inst.operands[0]);
         assembler->mov_reg(X0, ret_reg);
       }
-      assembler->ldp(FP, LR, SP, 16);
+      // For main function (bare-metal _start), don't restore stack - just exit
+      // Regular functions would restore stack properly in function epilogue
       assembler->ret();
       break;
     }
@@ -731,6 +741,54 @@ bool ARM64Backend::write_object(const std::string& path, const std::string& entr
   }
 }
 
+bool ARM64Backend::write_executable(const std::string& path, const std::string& entry_symbol) {
+  // Choose executable format based on target platform
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      // Use Mach-O builder for macOS
+      if (data_section.empty()) {
+        return macho_builder.write_executable(path.c_str(),
+                                             reinterpret_cast<const uint8_t*>(assembler->spill()),
+                                             static_cast<uint32_t>(assembler->bytes()),
+                                             0,
+                                             MachOArch::ARM64);
+      } else {
+        // For now, just write object and link - Mach-O executable writing with data is complex
+        std::string obj_path = path + ".o";
+        if (!write_object(obj_path, entry_symbol)) {
+          return false;
+        }
+        return link_executable(obj_path, path);
+      }
+      
+    case TargetPlatform::LINUX:
+      // Use ELF builder for Linux
+      if (data_section.empty()) {
+        return elf_builder.write_executable(path.c_str(),
+                                           reinterpret_cast<const uint8_t*>(assembler->spill()),
+                                           static_cast<uint32_t>(assembler->bytes()),
+                                           0,
+                                           ELFArch::ARM64);
+      } else {
+        // For now, just write object and link - ELF executable writing with data is complex
+        std::string obj_path = path + ".o";
+        if (!write_object(obj_path, entry_symbol)) {
+          return false;
+        }
+        return link_executable(obj_path, path);
+      }
+      
+    case TargetPlatform::WINDOWS:
+      // TODO: Implement PE support
+      std::cerr << "Windows PE support not yet implemented" << std::endl;
+      return false;
+      
+    default:
+      std::cerr << "Unsupported target platform" << std::endl;
+      return false;
+  }
+}
+
 bool ARM64Backend::link_executable(const std::string& obj_path, const std::string& exe_path) {
   std::string cmd;
   int rc;
@@ -822,17 +880,16 @@ void ARM64Backend::emit_syscall(const IR::SyscallInst& inst) {
       platform_syscall_number = static_cast<uint64_t>(inst.syscall_number); // Linux syscalls are direct
       break;
     default:
-      platform_syscall_number = 0x2000000ULL | static_cast<uint64_t>(inst.syscall_number); // Default to Darwin
+      platform_syscall_number = static_cast<uint64_t>(inst.syscall_number); // Default to Linux for ELF
       break;
   }
 
-  // Generic syscall emission (Darwin)
-  // Argument registers
+  // ARM64 Linux syscall calling convention
+  // Argument registers: X0, X1, X2, X3, X4, X5
+  // Syscall number: X8 (not X16 which is for Darwin)
   nextgen::jet::arm64::Register arg_regs[6] = { X0, X1, X2, X3, X4, X5 };
 
-  // No need for complex X0 preservation since syscall results are now in X20
-
-  // Load args generically
+  // Load syscall arguments
   for (size_t i = 0; i < inst.args.size() && i < 6; ++i) {
     auto &a = inst.args[i];
     if (auto ci = std::dynamic_pointer_cast<IR::ConstantInt>(a)) {
@@ -887,9 +944,16 @@ void ARM64Backend::emit_syscall(const IR::SyscallInst& inst) {
     }
   }
 
-  // Set syscall number last (after using X16 nowhere else)
-  assembler->mov_imm(X16, platform_syscall_number);
-  assembler->svc(Imm16(0x80));
+  // Set syscall number in appropriate register based on platform
+  if (target_platform == TargetPlatform::LINUX) {
+    // Linux ARM64: syscall number in X8
+    assembler->mov_imm(X8, platform_syscall_number);
+    assembler->svc(Imm16(0));
+  } else {
+    // Darwin ARM64: syscall number in X16 
+    assembler->mov_imm(X16, platform_syscall_number);
+    assembler->svc(Imm16(0x80));
+  }
 }
 
 nextgen::jet::arm64::Register ARM64Backend::get_or_alloc_register(const std::shared_ptr<IR::Register>& reg) {

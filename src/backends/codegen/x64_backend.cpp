@@ -1219,6 +1219,49 @@ bool X64Backend::write_object(const std::string& path, const std::string& entry_
   }
 }
 
+bool X64Backend::write_executable(const std::string& path, const std::string& entry_symbol) {
+  // Place string labels at the end of the code (inline data pool)
+  for (auto& [str_content, label] : string_labels) {
+    assembler->place_label(label);
+    for (char c : str_content) {
+      assembler->emit_u8(static_cast<uint8_t>(c));
+    }
+    assembler->emit_u8(0); // null terminator
+  }
+
+  // Choose executable format based on target platform
+  switch (target_platform) {
+    case TargetPlatform::MACOS:
+      // Use Mach-O builder for macOS
+      return macho_builder.write_executable(
+        path.c_str(),
+        reinterpret_cast<const uint8_t*>(assembler->spill()),
+        static_cast<uint32_t>(assembler->bytes()),
+        0,
+        MachOArch::X86_64
+      );
+      
+    case TargetPlatform::LINUX:
+      // Use ELF builder for Linux
+      return elf_builder.write_executable(
+        path.c_str(),
+        reinterpret_cast<const uint8_t*>(assembler->spill()),
+        static_cast<uint32_t>(assembler->bytes()),
+        0,
+        ELFArch::X86_64
+      );
+      
+    case TargetPlatform::WINDOWS:
+      // TODO: Implement PE support
+      std::cerr << "Windows PE support not yet implemented" << std::endl;
+      return false;
+      
+    default:
+      std::cerr << "Unsupported target platform" << std::endl;
+      return false;
+  }
+}
+
 bool X64Backend::link_executable(const std::string& obj_path, const std::string& exe_path) {
   std::string cmd;
   int rc;

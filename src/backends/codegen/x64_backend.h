@@ -23,6 +23,7 @@ public:
   const uint8_t* get_code() const override;
   size_t get_code_size() const override;
   bool write_object(const std::string& path, const std::string& entry_symbol = "main") override;
+  bool write_executable(const std::string& path, const std::string& entry_symbol = "main") override;
   bool link_executable(const std::string& obj_path, const std::string& exe_path) override;
 
 private:

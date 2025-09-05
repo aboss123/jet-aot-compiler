@@ -45,4 +45,4 @@ generated.s
 .LSOverride
 
 # Test outputs
-Testing/
+Testing/ref/

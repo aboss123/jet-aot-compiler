@@ -41,8 +41,34 @@ public:
   struct Relocation {
     uint64_t offset;       // Offset in section
     uint32_t symbol;       // Symbol table index  
-    uint32_t type;         // Relocation type
+    uint32_t type;         // Architecture-specific relocation type
     int64_t addend;        // Addend for RELA relocations
+    
+    // Helper constructors for common relocation types
+    static Relocation abs64(uint64_t offset, uint32_t symbol, int64_t addend = 0) {
+      return {offset, symbol, 1, addend}; // Type 1 = ABS64 for both x64 and ARM64
+    }
+    
+    static Relocation pc_rel32(uint64_t offset, uint32_t symbol, int64_t addend = 0) {
+      return {offset, symbol, 2, addend}; // Type 2 = PC-relative 32-bit
+    }
+    
+    // ARM64-specific relocations
+    static Relocation adrp_page21(uint64_t offset, uint32_t symbol, int64_t addend = 0) {
+      return {offset, symbol, 3, addend}; // Type 3 = ADRP (page-relative)
+    }
+    
+    static Relocation add_lo12(uint64_t offset, uint32_t symbol, int64_t addend = 0) {
+      return {offset, symbol, 4, addend}; // Type 4 = ADD low 12 bits
+    }
+    
+    static Relocation call26(uint64_t offset, uint32_t symbol, int64_t addend = 0) {
+      return {offset, symbol, 5, addend}; // Type 5 = BL/B call 26-bit
+    }
+    
+    static Relocation jump26(uint64_t offset, uint32_t symbol, int64_t addend = 0) {
+      return {offset, symbol, 6, addend}; // Type 6 = B jump 26-bit
+    }
   };
   
   bool write_object_with_relocations(const char* path,

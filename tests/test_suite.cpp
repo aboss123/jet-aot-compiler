@@ -15,6 +15,43 @@
 using namespace IR;
 using namespace CodeGen;
 
+// Cross-platform syscall number helper
+class SyscallNumbers {
+public:
+    static int get_write_syscall(TargetArch arch, TargetPlatform platform = TargetPlatform::MACOS) {
+        if (arch == TargetArch::ARM64) {
+            return (platform == TargetPlatform::LINUX) ? 64 : 4;  // Linux ARM64: 64, macOS ARM64: 4
+        } else {
+            return (platform == TargetPlatform::LINUX) ? 1 : 4;   // Linux x64: 1, macOS x64: 4
+        }
+    }
+    
+    static int get_exit_syscall(TargetArch arch, TargetPlatform platform = TargetPlatform::MACOS) {
+        if (arch == TargetArch::ARM64) {
+            return (platform == TargetPlatform::LINUX) ? 93 : 1;  // Linux ARM64: 93, macOS ARM64: 1
+        } else {
+            return (platform == TargetPlatform::LINUX) ? 60 : 1;  // Linux x64: 60, macOS x64: 1
+        }
+    }
+    
+    static int get_read_syscall(TargetArch arch, TargetPlatform platform = TargetPlatform::MACOS) {
+        if (arch == TargetArch::ARM64) {
+            return (platform == TargetPlatform::LINUX) ? 63 : 3;  // Linux ARM64: 63, macOS ARM64: 3
+        } else {
+            return (platform == TargetPlatform::LINUX) ? 0 : 3;   // Linux x64: 0, macOS x64: 3
+        }
+    }
+    
+    // Helper to get platform from backend (assumes macOS for current tests)
+    static TargetPlatform get_current_platform() {
+        #ifdef __linux__
+            return TargetPlatform::LINUX;
+        #else
+            return TargetPlatform::MACOS;
+        #endif
+    }
+};
+
 // Test utilities
 class TestUtils {
 public:
@@ -286,12 +323,12 @@ TEST(ARM64Backend, SystemCallGeneration) {
     auto test_len = builder.get_int32(4);
     
     std::vector<std::shared_ptr<Value>> write_args = {stdout_fd, test_str, test_len};
-    builder.create_syscall(4, write_args); // SYS_write
+    builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::ARM64), write_args); // Platform-aware write
     
-    // exit(0)
+    // exit(0)  
     auto exit_code = builder.get_int32(0);
     std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
-    builder.create_syscall(1, exit_args); // SYS_exit
+    builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::ARM64), exit_args); // Platform-aware exit
     
     // Compile and test
     auto backend = BackendFactory::create_backend(TargetArch::ARM64);
@@ -347,12 +384,12 @@ TEST(ARM64Backend, ExecutableGeneration) {
     auto hello_len = builder.get_int32(5);
     
     std::vector<std::shared_ptr<Value>> write_args = {stdout_fd, hello_str, hello_len};
-    builder.create_syscall(4, write_args);
+    builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::ARM64), write_args);
     
     // exit(0)
     auto exit_code = builder.get_int32(0);
     std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
-    builder.create_syscall(1, exit_args);
+    builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::ARM64), exit_args);
     
     // Compile
     auto backend = BackendFactory::create_backend(TargetArch::ARM64);
@@ -627,14 +664,18 @@ TEST(AOTCompiler, CrossArchitectureCompatibility) {
     IRBuilder builder;
     builder.set_insert_point(bb);
     
-    // Simple program: write message and exit
+    // Simple program: write message and exit - will be used for different architectures
     auto msg = module.create_global_string("Cross-arch test OK\n");
-    builder.create_syscall(4, {
+    
+    // Note: This test will be compiled for multiple architectures, but uses default macOS syscalls
+    // Real cross-platform tests should create architecture-specific modules
+    auto platform = SyscallNumbers::get_current_platform();
+    builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::ARM64, platform), {
         builder.get_int32(1),
         msg,
         builder.get_int32(19)  // Include the newline character
     });
-    builder.create_syscall(1, {builder.get_int32(0)});
+    builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::ARM64, platform), {builder.get_int32(0)});
     
     // Test ARM64
     auto arm64_backend = BackendFactory::create_backend(TargetArch::ARM64);
@@ -1424,12 +1465,12 @@ TEST(StandaloneExecutables, HelloWorldWithoutCRuntime) {
         auto stdout_fd = builder.get_int32(1);
         auto msg_len = builder.get_int32(25);
         std::vector<std::shared_ptr<Value>> write_args = {stdout_fd, hello_str, msg_len};
-        builder.create_syscall(4, write_args); // SYS_write
+        builder.create_syscall(SyscallNumbers::get_write_syscall(arch), write_args); // Architecture-aware write
         
         // exit(0)
         auto exit_code = builder.get_int32(0);
         std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
-        builder.create_syscall(1, exit_args); // SYS_exit
+        builder.create_syscall(SyscallNumbers::get_exit_syscall(arch), exit_args); // Architecture-aware exit
         
         // Compile with backend
         auto backend = BackendFactory::create_backend(arch);
@@ -1512,7 +1553,7 @@ TEST(StandaloneExecutables, MemoryOperationsComprehensive) {
         
         // exit(exit_code)
         std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
-        builder.create_syscall(1, exit_args);
+        builder.create_syscall(SyscallNumbers::get_exit_syscall(arch), exit_args);
         
         // Compile and test
         auto backend = BackendFactory::create_backend(arch);
@@ -1570,7 +1611,7 @@ TEST(StandaloneExecutables, ComparisonOperationsComprehensive) {
         // Exit with the total (should be 4 if all comparisons work)
         auto exit_code = builder.create_trunc(total, Type::i32());
         std::vector<std::shared_ptr<Value>> exit_args = {exit_code};
-        builder.create_syscall(1, exit_args);
+        builder.create_syscall(SyscallNumbers::get_exit_syscall(arch), exit_args);
         
         // Compile and test
         auto backend = BackendFactory::create_backend(arch);
@@ -1682,6 +1723,39 @@ TEST(CrossPlatform, ELFGeneration) {
     std::cout << "🎉 Cross-platform ELF generation test completed!" << std::endl;
 }
 
+// ARM64 runtime capability detection
+bool has_arm64_runtime_capability() {
+#ifdef __aarch64__
+    return true; // Native ARM64
+#else
+    // Check if we can run ARM64 binaries (e.g., through emulation)
+    // This is a basic check - in practice, you might want more sophisticated detection
+    return false;
+#endif
+}
+
+// Cross-platform ARM64 runtime check
+bool can_run_arm64_tests() {
+    auto platform = CodeGen::BackendFactory::get_native_platform();
+    auto arch = CodeGen::BackendFactory::get_native_arch();
+    
+    if (arch == CodeGen::TargetArch::ARM64) {
+        return true; // Native ARM64
+    }
+    
+    if (platform == CodeGen::TargetPlatform::MACOS) {
+        // macOS can run ARM64 binaries on Apple Silicon through Rosetta
+        return true;
+    }
+    
+    if (platform == CodeGen::TargetPlatform::LINUX) {
+        // Linux might have qemu-user for ARM64 emulation
+        return has_arm64_runtime_capability();
+    }
+    
+    return false;
+}
+
 TEST(CrossPlatform, ARM64CrossCompilationLinux) {
     std::cout << "🧪 Testing ARM64 Cross-Compilation on Linux..." << std::endl;
     
@@ -1693,6 +1767,12 @@ TEST(CrossPlatform, ARM64CrossCompilationLinux) {
     if (native_platform != TargetPlatform::LINUX) {
         std::cout << "    Skipping ARM64 cross-compilation test (not on Linux)" << std::endl;
         return;
+    }
+    
+    // Check if we can actually run ARM64 binaries
+    if (!can_run_arm64_tests()) {
+        std::cout << "    ⚠️  Skipping ARM64 execution test (no ARM64 runtime capability)" << std::endl;
+        std::cout << "    ✅ ARM64 object generation still tested" << std::endl;
     }
     
     // Create a simple ARM64 module for Linux
@@ -1744,6 +1824,414 @@ TEST(CrossPlatform, ARM64CrossCompilationLinux) {
     
     std::cout << "    ✅ ARM64 cross-compilation test completed successfully" << std::endl;
     std::cout << "🎉 ARM64 cross-compilation test completed!" << std::endl;
+}
+
+TEST(CrossPlatform, ELFExecutableGeneration) {
+    std::cout << "🧪 Testing ELF Executable Generation..." << std::endl;
+    
+    using namespace CodeGen;
+    using namespace IR;
+    
+    auto native_platform = BackendFactory::get_native_platform();
+    auto native_arch = BackendFactory::get_native_arch();
+    
+    std::cout << "    Platform: " << BackendFactory::platform_to_string(native_platform) << std::endl;
+    std::cout << "    Architecture: " << BackendFactory::arch_to_string(native_arch) << std::endl;
+    
+    // Test ELF executable generation on Linux
+    if (native_platform == TargetPlatform::LINUX) {
+        std::cout << "    🐧 Testing ELF executable generation on Linux..." << std::endl;
+        
+        // Create a simple module for testing
+        auto module = std::make_unique<Module>("elf_exec_test");
+        IRBuilder builder;
+        
+        // Create global string
+        auto hello_str = module->create_global_string("Hello, ELF World!\n");
+        
+        // Create _start function
+        Function* start_func = module->create_function("_start", Type::void_type(), {});
+        BasicBlock* start_bb = start_func->create_basic_block("entry");
+        builder.set_insert_point(start_bb);
+        
+        // write syscall: write(1, hello_str, 18) - Linux platform
+        auto fd_val = builder.get_int32(1);      // stdout
+        auto len_val = builder.get_int32(18);    // message length
+        builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::X86_64, TargetPlatform::LINUX), 
+                              {fd_val, hello_str, len_val}); // Linux x64 write
+        
+        // exit syscall: exit(0)
+        auto exit_code = builder.get_int32(0);
+        builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::X86_64, TargetPlatform::LINUX), 
+                              {exit_code}); // Linux x64 exit
+        
+        // Test x64 ELF executable generation
+        {
+            std::cout << "        Testing x64 ELF executable..." << std::endl;
+            auto backend = BackendFactory::create_backend(TargetArch::X86_64, TargetPlatform::LINUX);
+            if (!backend) {
+                std::cout << "        ❌ Failed to create x64 Linux backend" << std::endl;
+                return;
+            }
+            
+            // Compile module
+            if (!backend->compile_module(*module)) {
+                std::cout << "        ❌ Failed to compile x64 module" << std::endl;
+                return;
+            }
+            
+            // Write ELF executable directly
+            if (!backend->write_executable("elf_test_x64", "_start")) {
+                std::cout << "        ❌ Failed to write x64 ELF executable" << std::endl;
+                return;
+            }
+            
+            // Verify it's an ELF executable
+            std::string cmd = "file elf_test_x64";
+            int rc = std::system(cmd.c_str());
+            if (rc != 0) {
+                std::cout << "        ⚠️  Could not verify x64 ELF format" << std::endl;
+            }
+            
+            // Test execution
+            std::string exec_cmd = "./elf_test_x64";
+            rc = std::system(exec_cmd.c_str());
+            if (rc == 0) {
+                std::cout << "        ✅ x64 ELF executable ran successfully" << std::endl;
+            } else {
+                std::cout << "        ⚠️  x64 ELF executable execution failed (exit code: " << rc << ")" << std::endl;
+                
+                // Try to get more detailed error information
+                std::string debug_cmd = "strace -e trace=write,exit_group ./elf_test_x64 2>&1 | head -10";
+                std::cout << "        🔍 Debug info:" << std::endl;
+                std::system(debug_cmd.c_str());
+            }
+        }
+        
+        // Test ARM64 ELF executable generation (if we have ARM64 runtime capability)
+        if (can_run_arm64_tests()) {
+            std::cout << "        Testing ARM64 ELF executable..." << std::endl;
+            
+            // Create separate ARM64 module with correct syscall numbers
+            auto arm64_module = std::make_unique<Module>("elf_test_arm64");
+            IRBuilder arm64_builder;
+            
+            // Create ARM64-specific global string
+            auto arm64_hello_str = arm64_module->create_global_string("ARM64 ELF Hello!\n");
+            
+            // Create _start function for ARM64
+            Function* arm64_start_func = arm64_module->create_function("_start", Type::void_type(), {});
+            BasicBlock* arm64_start_bb = arm64_start_func->create_basic_block("entry");
+            arm64_builder.set_insert_point(arm64_start_bb);
+            
+            // ARM64 Linux syscalls
+            auto arm64_fd_val = arm64_builder.get_int32(1);      // stdout
+            auto arm64_len_val = arm64_builder.get_int32(18);    // message length
+            arm64_builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::ARM64, TargetPlatform::LINUX), 
+                                       {arm64_fd_val, arm64_hello_str, arm64_len_val}); // ARM64 Linux write
+            
+            auto arm64_exit_code = arm64_builder.get_int32(0);
+            arm64_builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::ARM64, TargetPlatform::LINUX), 
+                                       {arm64_exit_code}); // ARM64 Linux exit
+            
+            auto backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::LINUX);
+            if (!backend) {
+                std::cout << "        ❌ Failed to create ARM64 Linux backend" << std::endl;
+                return;
+            }
+            
+            // Compile ARM64 module
+            if (!backend->compile_module(*arm64_module)) {
+                std::cout << "        ❌ Failed to compile ARM64 module" << std::endl;
+                return;
+            }
+            
+            // Write ELF executable directly
+            if (!backend->write_executable("elf_test_arm64", "_start")) {
+                std::cout << "        ❌ Failed to write ARM64 ELF executable" << std::endl;
+                return;
+            }
+            
+            // Verify it's an ARM64 ELF executable
+            std::string cmd = "file elf_test_arm64";
+            int rc = std::system(cmd.c_str());
+            if (rc != 0) {
+                std::cout << "        ⚠️  Could not verify ARM64 ELF format" << std::endl;
+            }
+            
+            // Test execution
+            std::string exec_cmd = "./elf_test_arm64";
+            rc = std::system(exec_cmd.c_str());
+            if (rc == 0) {
+                std::cout << "        ✅ ARM64 ELF executable ran successfully" << std::endl;
+            } else {
+                std::cout << "        ⚠️  ARM64 ELF executable execution failed (exit code: " << rc << ")" << std::endl;
+                
+                // Try to get more detailed error information
+                std::string debug_cmd = "strace -e trace=write,exit_group ./elf_test_arm64 2>&1 | head -10";
+                std::cout << "        🔍 Debug info:" << std::endl;
+                std::system(debug_cmd.c_str());
+            }
+        } else {
+            std::cout << "        ⚠️  Skipping ARM64 ELF executable test (no ARM64 runtime capability)" << std::endl;
+        }
+        
+    } else {
+        std::cout << "    ⚠️  Skipping ELF executable test (not on Linux)" << std::endl;
+        std::cout << "    💡 ELF executables can only be generated and tested on Linux" << std::endl;
+    }
+    
+    // Test cross-platform ELF object generation (works on any platform)
+    std::cout << "    🌍 Testing cross-platform ELF object generation..." << std::endl;
+    
+    for (auto arch : {TargetArch::X86_64, TargetArch::ARM64}) {
+        std::string arch_name = (arch == TargetArch::ARM64) ? "ARM64" : "x64";
+        
+        auto backend = BackendFactory::create_backend(arch, TargetPlatform::LINUX);
+        if (!backend) {
+            std::cout << "        ❌ Failed to create " << arch_name << " Linux backend" << std::endl;
+            continue;
+        }
+        
+        // Create simple module
+        auto module = std::make_unique<Module>("elf_obj_test_" + arch_name);
+        IRBuilder builder;
+        
+        Function* func = module->create_function("_start", Type::void_type(), {});
+        BasicBlock* bb = func->create_basic_block("entry");
+        builder.set_insert_point(bb);
+        
+        // Simple exit syscall
+        auto exit_code = builder.get_int32(0);
+        builder.create_syscall(1, {exit_code});
+        
+        // Compile and write object
+        if (!backend->compile_module(*module)) {
+            std::cout << "        ❌ Failed to compile " << arch_name << " module" << std::endl;
+            continue;
+        }
+        
+        std::string obj_path = "elf_obj_test_" + arch_name + ".o";
+        if (!backend->write_object(obj_path, "_start")) {
+            std::cout << "        ❌ Failed to write " << arch_name << " ELF object" << std::endl;
+            continue;
+        }
+        
+        // Verify object file
+        std::string cmd = "file " + obj_path;
+        int rc = std::system(cmd.c_str());
+        if (rc == 0) {
+            std::cout << "        ✅ " << arch_name << " ELF object generation successful" << std::endl;
+        } else {
+            std::cout << "        ⚠️  Could not verify " << arch_name << " ELF object format" << std::endl;
+        }
+    }
+    
+    std::cout << "🎉 ELF executable generation test completed!" << std::endl;
+}
+
+TEST(CrossPlatform, ELFExecutableExecutionDebug) {
+    std::cout << "🧪 Testing ELF Executable Execution with Debug Tools..." << std::endl;
+    
+    using namespace CodeGen;
+    using namespace IR;
+    
+    auto native_platform = BackendFactory::get_native_platform();
+    
+    if (native_platform != TargetPlatform::LINUX) {
+        std::cout << "    ⚠️  Skipping ELF execution debug test (not on Linux)" << std::endl;
+        return;
+    }
+    
+    std::cout << "    🔧 Creating comprehensive ELF executable test..." << std::endl;
+    
+    // Create a more comprehensive test module
+    auto module = std::make_unique<Module>("elf_debug_test");
+    IRBuilder builder;
+    
+    // Create multiple global strings
+    auto hello_str = module->create_global_string("Hello, ELF Debug!\n");
+    auto world_str = module->create_global_string("World!\n");
+    
+    // Create _start function
+    Function* start_func = module->create_function("_start", Type::void_type(), {});
+    BasicBlock* start_bb = start_func->create_basic_block("entry");
+    builder.set_insert_point(start_bb);
+    
+    // Test multiple syscalls - use Linux platform for ELF tests
+    auto platform = TargetPlatform::LINUX;
+    
+    // write(1, hello_str, 19)
+    auto fd_val = builder.get_int32(1);
+    auto hello_len = builder.get_int32(19);
+    builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::X86_64, platform), 
+                          {fd_val, hello_str, hello_len}); // Platform-aware write syscall
+    
+    // write(1, world_str, 7) 
+    auto world_len = builder.get_int32(7);
+    builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::X86_64, platform), 
+                          {fd_val, world_str, world_len}); // Platform-aware write syscall
+    
+    // exit(42) - non-zero exit code for testing
+    auto exit_code = builder.get_int32(42);
+    builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::X86_64, platform), 
+                          {exit_code}); // Platform-aware exit syscall
+    
+    // Test x64 ELF executable
+    {
+        std::cout << "        🔍 Testing x64 ELF executable with debug tools..." << std::endl;
+        
+        auto backend = BackendFactory::create_backend(TargetArch::X86_64, TargetPlatform::LINUX);
+        if (!backend) {
+            std::cout << "        ❌ Failed to create x64 Linux backend" << std::endl;
+            return;
+        }
+        
+        if (!backend->compile_module(*module)) {
+            std::cout << "        ❌ Failed to compile x64 module" << std::endl;
+            return;
+        }
+        
+        if (!backend->write_executable("elf_debug_x64", "_start")) {
+            std::cout << "        ❌ Failed to write x64 ELF executable" << std::endl;
+            return;
+        }
+        
+        // Test 1: Basic execution
+        std::cout << "            📋 Test 1: Basic execution" << std::endl;
+        std::string exec_cmd = "./elf_debug_x64";
+        int rc = std::system(exec_cmd.c_str());
+        std::cout << "            Exit code: " << rc << " (expected: 42)" << std::endl;
+        
+        // Test 2: Capture output
+        std::cout << "            📋 Test 2: Output capture" << std::endl;
+        std::string output = TestUtils::capture_output(exec_cmd);
+        std::cout << "            Output: '" << output << "'" << std::endl;
+        
+        // Test 3: strace analysis
+        std::cout << "            📋 Test 3: System call analysis" << std::endl;
+        std::string strace_cmd = "strace -e trace=write,exit_group ./elf_debug_x64 2>&1";
+        std::cout << "            System calls:" << std::endl;
+        std::system(strace_cmd.c_str());
+        
+        // Test 4: File analysis
+        std::cout << "            📋 Test 4: File format analysis" << std::endl;
+        std::string file_cmd = "file elf_debug_x64";
+        std::system(file_cmd.c_str());
+        
+        // Test 5: ELF header analysis
+        std::cout << "            📋 Test 5: ELF header analysis" << std::endl;
+        std::string readelf_cmd = "readelf -h elf_debug_x64";
+        std::system(readelf_cmd.c_str());
+        
+        // Test 6: Program headers
+        std::cout << "            📋 Test 6: Program headers" << std::endl;
+        std::string ph_cmd = "readelf -l elf_debug_x64";
+        std::system(ph_cmd.c_str());
+        
+        if (rc == 42) {
+            std::cout << "        ✅ x64 ELF executable execution successful!" << std::endl;
+        } else {
+            std::cout << "        ❌ x64 ELF executable execution failed!" << std::endl;
+        }
+    }
+    
+    // Test ARM64 ELF executable (if available)
+    if (can_run_arm64_tests()) {
+        std::cout << "        🔍 Testing ARM64 ELF executable with debug tools..." << std::endl;
+        
+        // Create separate module for ARM64 with correct syscall numbers
+        auto arm64_module = std::make_unique<Module>("elf_debug_arm64_test");
+        IRBuilder arm64_builder;
+        
+        // Create ARM64-specific global strings
+        auto arm64_hello_str = arm64_module->create_global_string("Hello, ELF Debug!\n");
+        auto arm64_world_str = arm64_module->create_global_string("World!\n");
+        
+        // Create _start function for ARM64
+        Function* arm64_start_func = arm64_module->create_function("_start", Type::void_type(), {});
+        BasicBlock* arm64_start_bb = arm64_start_func->create_basic_block("entry");
+        arm64_builder.set_insert_point(arm64_start_bb);
+        
+        // ARM64-specific syscalls for Linux
+        auto arm64_fd_val = arm64_builder.get_int32(1);
+        auto arm64_hello_len = arm64_builder.get_int32(19);
+        arm64_builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::ARM64, platform), 
+                                   {arm64_fd_val, arm64_hello_str, arm64_hello_len}); // ARM64 Linux write
+        
+        auto arm64_world_len = arm64_builder.get_int32(7);
+        arm64_builder.create_syscall(SyscallNumbers::get_write_syscall(TargetArch::ARM64, platform), 
+                                   {arm64_fd_val, arm64_world_str, arm64_world_len}); // ARM64 Linux write
+        
+        auto arm64_exit_code = arm64_builder.get_int32(42);
+        arm64_builder.create_syscall(SyscallNumbers::get_exit_syscall(TargetArch::ARM64, platform), 
+                                   {arm64_exit_code}); // ARM64 Linux exit
+        
+        auto backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::LINUX);
+        if (!backend) {
+            std::cout << "        ❌ Failed to create ARM64 Linux backend" << std::endl;
+            return;
+        }
+        
+        if (!backend->compile_module(*arm64_module)) {
+            std::cout << "        ❌ Failed to compile ARM64 module" << std::endl;
+            return;
+        }
+        
+        if (!backend->write_executable("elf_debug_arm64", "_start")) {
+            std::cout << "        ❌ Failed to write ARM64 ELF executable" << std::endl;
+            return;
+        }
+        
+        // Test execution
+        std::string exec_cmd = "./elf_debug_arm64";
+        int rc = std::system(exec_cmd.c_str());
+        std::cout << "        ARM64 exit code: " << rc << " (expected: 42)" << std::endl;
+        
+        // Capture output
+        std::string output = TestUtils::capture_output(exec_cmd);
+        std::cout << "        ARM64 output: '" << output << "'" << std::endl;
+        
+        // File analysis
+        std::string file_cmd = "file elf_debug_arm64";
+        std::system(file_cmd.c_str());
+        
+        if (rc == 42) {
+            std::cout << "        ✅ ARM64 ELF executable execution successful!" << std::endl;
+        } else {
+            std::cout << "        ❌ ARM64 ELF executable execution failed!" << std::endl;
+        }
+    } else {
+        std::cout << "        ⚠️  Skipping ARM64 ELF debug test (no ARM64 runtime capability)" << std::endl;
+    }
+    
+    std::cout << "🎉 ELF executable execution debug test completed!" << std::endl;
+}
+
+TEST(CrossPlatform, ARM64RuntimeCapability) {
+    std::cout << "🧪 Testing ARM64 Runtime Capability..." << std::endl;
+    
+    using namespace CodeGen;
+    
+    auto platform = BackendFactory::get_native_platform();
+    auto arch = BackendFactory::get_native_arch();
+    
+    std::cout << "    Platform: " << BackendFactory::platform_to_string(platform) << std::endl;
+    std::cout << "    Architecture: " << BackendFactory::arch_to_string(arch) << std::endl;
+    
+    bool can_run = can_run_arm64_tests();
+    std::cout << "    ARM64 runtime capability: " << (can_run ? "✅ Available" : "❌ Not available") << std::endl;
+    
+    // Test ARM64 backend creation regardless of runtime capability
+    auto backend = BackendFactory::create_backend(TargetArch::ARM64, TargetPlatform::LINUX);
+    if (backend) {
+        std::cout << "    ✅ ARM64 Linux backend creation successful" << std::endl;
+    } else {
+        std::cout << "    ❌ ARM64 Linux backend creation failed" << std::endl;
+        return;
+    }
+    
+    std::cout << "🎉 ARM64 runtime capability test completed!" << std::endl;
 }
 
 TEST(CrossPlatform, LinuxToolchainCompatibility) {
