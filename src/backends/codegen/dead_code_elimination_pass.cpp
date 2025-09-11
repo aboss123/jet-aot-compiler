@@ -12,52 +12,52 @@ bool DeadCodeEliminationPass::run(IR::Module& module) {
     for (auto& function : module.functions) {
         std::cout << "    📍 Function: " << function->name << "\n";
         
-        // For now, just analyze the structure without making changes
-        // In a real implementation, we'd find and remove unreachable code
+        // Find all reachable instructions
+        std::unordered_set<uint32_t> reachable;
+        find_reachable_instructions(*function, reachable);
         
+        // Remove dead instructions from each basic block
         for (auto& block : function->basic_blocks) {
             std::cout << "      📍 Basic Block: " << block->name << " (" << block->instructions.size() << " instructions)\n";
             
-            // Count different types of instructions
-            int binary_ops = 0, control_flow = 0, memory_ops = 0;
+            // Create new instruction list with only reachable instructions
+            std::vector<std::unique_ptr<IR::Instruction>> new_instructions;
+            size_t removed_count = 0;
             
-            for (const auto& inst : block->instructions) {
-                switch (inst->opcode) {
-                    case IR::Opcode::ADD:
-                    case IR::Opcode::SUB:
-                    case IR::Opcode::MUL:
-                    case IR::Opcode::SDIV:
-                    case IR::Opcode::AND:
-                    case IR::Opcode::OR:
-                    case IR::Opcode::XOR:
-                        binary_ops++;
-                        break;
-                    case IR::Opcode::RET:
-                    case IR::Opcode::BR:
-                    case IR::Opcode::BR_COND:
-                        control_flow++;
-                        break;
-                    case IR::Opcode::LOAD:
-                    case IR::Opcode::STORE:
-                        memory_ops++;
-                        break;
-                    default:
-                        break;
+            for (auto& inst : block->instructions) {
+                bool is_reachable = false;
+                
+                // Check if this instruction is reachable
+                if (inst->result_reg && reachable.find(inst->result_reg->id) != reachable.end()) {
+                    is_reachable = true;
+                }
+                
+                // Always keep instructions with side effects
+                if (has_side_effects(inst)) {
+                    is_reachable = true;
+                }
+                
+                if (is_reachable) {
+                    new_instructions.push_back(std::move(inst));
+                } else {
+                    std::cout << "        🗑️ Removing dead instruction: " << static_cast<int>(inst->opcode) << "\n";
+                    removed_count++;
+                    modified = true;
                 }
             }
             
-            std::cout << "        📊 Binary ops: " << binary_ops 
-                      << ", Control flow: " << control_flow 
-                      << ", Memory ops: " << memory_ops << "\n";
+            // Replace the instruction list
+            block->instructions = std::move(new_instructions);
+            
+            if (removed_count > 0) {
+                std::cout << "        ✅ Removed " << removed_count << " dead instructions\n";
+            }
         }
-        
-        // Mark as modified to demonstrate the pass works
-        modified = true;
     }
     
     if (modified) {
         mark_modified();
-        std::cout << "  ✅ Dead code elimination pass completed with analysis\n";
+        std::cout << "  ✅ Dead code elimination pass completed with modifications\n";
     } else {
         std::cout << "  ⚪ Dead code elimination pass completed - no changes needed\n";
     }
@@ -69,8 +69,62 @@ void DeadCodeEliminationPass::find_reachable_instructions(
     IR::Function& function,
     std::unordered_set<uint32_t>& reachable) {
     
-    // Placeholder implementation
-    // In a real implementation, we'd analyze the control flow graph
+    // Start from entry point and follow all uses
+    std::queue<uint32_t> worklist;
+    
+    // Add all function arguments to worklist
+    for (const auto& arg : function.arguments) {
+        worklist.push(arg->id);
+        reachable.insert(arg->id);
+    }
+    
+    // Add all return values and control flow instructions
+    for (const auto& block : function.basic_blocks) {
+        for (const auto& inst : block->instructions) {
+            // Add instructions with side effects
+            if (has_side_effects(inst)) {
+                if (inst->result_reg) {
+                    worklist.push(inst->result_reg->id);
+                    reachable.insert(inst->result_reg->id);
+                }
+            }
+            
+            // Add operands of control flow instructions
+            if (inst->opcode == IR::Opcode::BR_COND) {
+                for (const auto& operand : inst->operands) {
+                    if (operand->kind == IR::Value::Kind::REGISTER) {
+                        auto reg = std::static_pointer_cast<IR::Register>(operand);
+                        worklist.push(reg->id);
+                        reachable.insert(reg->id);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Follow all uses of reachable values
+    while (!worklist.empty()) {
+        uint32_t current_id = worklist.front();
+        worklist.pop();
+        
+        // Find all instructions that use this value
+        for (const auto& block : function.basic_blocks) {
+            for (const auto& inst : block->instructions) {
+                for (const auto& operand : inst->operands) {
+                    if (operand->kind == IR::Value::Kind::REGISTER) {
+                        auto reg = std::static_pointer_cast<IR::Register>(operand);
+                        if (reg->id == current_id) {
+                            // This instruction uses the current value
+                            if (inst->result_reg && reachable.find(inst->result_reg->id) == reachable.end()) {
+                                worklist.push(inst->result_reg->id);
+                                reachable.insert(inst->result_reg->id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 bool DeadCodeEliminationPass::has_side_effects(const std::unique_ptr<IR::Instruction>& inst) const {

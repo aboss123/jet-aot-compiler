@@ -136,14 +136,30 @@ struct Type {
     return t;
   }
   
-  static Type vector(const Type& element_type) {
+  static Type vector(const Type& element_type, uint32_t num_elements) {
     Type t;
     t.kind = TypeKind::VECTOR;
-    t.array_length = 0; // Dynamic size
-    t.size_bits = 64;   // Pointer to data + metadata
+    t.array_length = num_elements; // Fixed size for SIMD vectors
+    t.size_bits = element_type.size_bits * num_elements;
     t.element_type = std::make_unique<Type>(element_type);
     return t;
   }
+  
+  // Common SIMD vector types
+  static Type v4f32() { return vector(f32(), 4); }    // 128-bit float vector (SSE/NEON)
+  static Type v2f64() { return vector(f64(), 2); }    // 128-bit double vector
+  static Type v16i8() { return vector(i8(), 16); }    // 128-bit byte vector
+  static Type v8i16() { return vector(i16(), 8); }    // 128-bit short vector
+  static Type v4i32() { return vector(i32(), 4); }    // 128-bit int vector
+  static Type v2i64() { return vector(i64(), 2); }    // 128-bit long vector
+  
+  // 256-bit AVX vectors
+  static Type v8f32() { return vector(f32(), 8); }    // 256-bit float vector
+  static Type v4f64() { return vector(f64(), 4); }    // 256-bit double vector
+  static Type v32i8() { return vector(i8(), 32); }    // 256-bit byte vector
+  static Type v16i16() { return vector(i16(), 16); }  // 256-bit short vector
+  static Type v8i32() { return vector(i32(), 8); }    // 256-bit int vector
+  static Type v4i64() { return vector(i64(), 4); }    // 256-bit long vector
   
   static Type struct_type(const std::vector<Type>& fields, 
                          const std::vector<std::string>& names = {}) {
@@ -171,7 +187,22 @@ struct Type {
   bool is_float() const { return kind == TypeKind::F32 || kind == TypeKind::F64; }
   bool is_pointer() const { return kind == TypeKind::PTR; }
   bool is_aggregate() const { return kind == TypeKind::STRUCT || kind == TypeKind::ARRAY; }
+  bool is_vector() const { return kind == TypeKind::VECTOR; }
   bool is_void() const { return kind == TypeKind::VOID; }
+  
+  // Vector-specific queries
+  bool is_vector_of_integers() const { 
+    return is_vector() && element_type && element_type->is_integer(); 
+  }
+  bool is_vector_of_floats() const { 
+    return is_vector() && element_type && element_type->is_float(); 
+  }
+  uint32_t get_vector_num_elements() const { 
+    return is_vector() ? array_length : 0; 
+  }
+  Type get_vector_element_type() const {
+    return (is_vector() && element_type) ? *element_type : Type::void_type();
+  }
   
   // Size calculations
   uint32_t size_bytes() const { return (size_bits + 7) / 8; }
@@ -190,8 +221,13 @@ struct Type {
       }
       case TypeKind::ARRAY: 
         return element_type ? element_type->alignment() : 1;
-      case TypeKind::VECTOR:
-        return 8; // Pointer alignment
+      case TypeKind::VECTOR: {
+        // SIMD vectors need proper alignment: 16 bytes for 128-bit, 32 bytes for 256-bit
+        uint32_t vector_size_bytes = size_bytes();
+        if (vector_size_bytes <= 16) return 16;      // 128-bit alignment (SSE/NEON)
+        else if (vector_size_bytes <= 32) return 32; // 256-bit alignment (AVX)
+        else return 64;                               // 512-bit alignment (AVX-512)
+      }
       default: return 1;
     }
   }
@@ -280,6 +316,13 @@ public:
   double value;
 };
 
+class ConstantVector : public Value {
+public:
+  ConstantVector(const std::vector<std::shared_ptr<Value>>& elems, Type vector_type) 
+    : Value(Kind::CONSTANT, vector_type), elements(elems) {}
+  std::vector<std::shared_ptr<Value>> elements;
+};
+
 class Register : public Value {
 public:
   Register(Type t, const std::string& n = "") : Value(Kind::REGISTER, t), name(n) {}
@@ -344,6 +387,29 @@ enum class Opcode {
   VECTOR_INSERT,    // Insert element into vector
   VECTOR_SHUFFLE,   // Shuffle vector elements
   
+  // Vector arithmetic operations
+  VADD, VSUB, VMUL, VDIV,           // Vector arithmetic (int/float)
+  VFADD, VFSUB, VFMUL, VFDIV,       // Explicit float vector arithmetic
+  
+  // Vector bitwise operations  
+  VAND, VOR, VXOR, VNOT,            // Vector bitwise operations
+  VSHL, VLSHR, VASHR,               // Vector shift operations
+  
+  // Vector comparison operations
+  VICMP_EQ, VICMP_NE, VICMP_ULT, VICMP_ULE, VICMP_UGT, VICMP_UGE,
+  VICMP_SLT, VICMP_SLE, VICMP_SGT, VICMP_SGE,  // Vector integer comparisons
+  VFCMP_OEQ, VFCMP_ONE, VFCMP_OLT, VFCMP_OLE, VFCMP_OGT, VFCMP_OGE, // Vector float comparisons
+  
+  // Vector conversion operations
+  VTRUNC, VZEXT, VSEXT,             // Vector integer conversions
+  VFPTRUNC, VFPEXT,                 // Vector float conversions
+  VFPTOUI, VFPTOSI, VUIFP, VSIFP,   // Vector float/int conversions
+  VBITCAST,                         // Vector type punning
+  
+  // Vector creation and manipulation
+  VECTOR_SPLAT,                     // Broadcast scalar to all vector elements
+  VECTOR_BUILD,                     // Build vector from scalar elements
+  
   // Atomic operations with memory ordering
   ATOMIC_LOAD, ATOMIC_STORE, ATOMIC_CAS, ATOMIC_RMW,
   ATOMIC_FENCE,
@@ -384,6 +450,15 @@ public:
     : Instruction(op, lhs->type) {
     operands.push_back(lhs);
     operands.push_back(rhs);
+  }
+};
+
+// Unary operations (not, etc.)
+class UnaryOp : public Instruction {
+public:
+  UnaryOp(Opcode op, std::shared_ptr<Value> operand)
+    : Instruction(op, operand->type) {
+    operands.push_back(operand);
   }
 };
 
@@ -570,6 +645,22 @@ public:
   }
 };
 
+class SwitchInst : public Instruction {
+public:
+  SwitchInst(std::shared_ptr<Value> value, BasicBlock* default_dest)
+    : Instruction(Opcode::SWITCH, Type::void_type()) {
+    operands.push_back(value);
+    extra_block = default_dest;
+  }
+  
+  void add_case(std::shared_ptr<Value> case_value, BasicBlock* dest) {
+    operands.push_back(case_value);
+    case_destinations.push_back(dest);
+  }
+  
+  std::vector<BasicBlock*> case_destinations;
+};
+
 // Atomic operations with safety and memory ordering
 class AtomicLoadInst : public Instruction {
 public:
@@ -733,6 +824,112 @@ public:
   
   uint32_t syscall_number;
   std::vector<std::shared_ptr<Value>> args;
+};
+
+// Vector operations
+class VectorExtractInst : public Instruction {
+public:
+  VectorExtractInst(std::shared_ptr<Value> vector, std::shared_ptr<Value> index)
+    : Instruction(Opcode::VECTOR_EXTRACT, vector->type.get_vector_element_type()) {
+    operands.push_back(vector);
+    operands.push_back(index);
+  }
+};
+
+class VectorInsertInst : public Instruction {
+public:
+  VectorInsertInst(std::shared_ptr<Value> vector, std::shared_ptr<Value> element, std::shared_ptr<Value> index)
+    : Instruction(Opcode::VECTOR_INSERT, vector->type) {
+    operands.push_back(vector);
+    operands.push_back(element);
+    operands.push_back(index);
+  }
+};
+
+class VectorShuffleInst : public Instruction {
+public:
+  VectorShuffleInst(std::shared_ptr<Value> vec1, std::shared_ptr<Value> vec2, std::shared_ptr<Value> mask)
+    : Instruction(Opcode::VECTOR_SHUFFLE, vec1->type) {
+    operands.push_back(vec1);
+    operands.push_back(vec2);
+    operands.push_back(mask);
+  }
+};
+
+// Vector arithmetic instructions
+class VectorBinaryInst : public Instruction {
+public:
+  VectorBinaryInst(Opcode op, std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs)
+    : Instruction(op, lhs->type) {
+    operands.push_back(lhs);
+    operands.push_back(rhs);
+  }
+};
+
+// Vector unary instructions
+class VectorUnaryInst : public Instruction {
+public:
+  VectorUnaryInst(Opcode op, std::shared_ptr<Value> operand)
+    : Instruction(op, operand->type) {
+    operands.push_back(operand);
+  }
+};
+
+// Vector comparison instructions
+class VectorCompareInst : public Instruction {
+public:
+  VectorCompareInst(Opcode op, std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs)
+    : Instruction(op, create_compare_result_type(lhs->type)) {  // Result has same vector type but with i1 elements
+    operands.push_back(lhs);
+    operands.push_back(rhs);
+  }
+
+private:
+  Type create_compare_result_type(const Type& input_type) {
+    if (input_type.is_vector()) {
+      // Vector comparison results in vector of i1 with same element count
+      return Type::vector(Type::i1(), input_type.get_vector_num_elements());
+    }
+    return Type::i1(); // Fallback for scalar
+  }
+};
+
+// Vector conversion instructions
+class VectorConvertInst : public Instruction {
+public:
+  VectorConvertInst(Opcode op, std::shared_ptr<Value> value, Type dest_type)
+    : Instruction(op, dest_type) {
+    operands.push_back(value);
+  }
+};
+
+// Vector splat instruction (broadcast scalar to vector)
+class VectorSplatInst : public Instruction {
+public:
+  VectorSplatInst(std::shared_ptr<Value> scalar, Type vector_type)
+    : Instruction(Opcode::VECTOR_SPLAT, vector_type) {
+    operands.push_back(scalar);
+  }
+};
+
+// Vector build instruction (create vector from scalars)
+class VectorBuildInst : public Instruction {
+public:
+  VectorBuildInst(const std::vector<std::shared_ptr<Value>>& elements, Type vector_type)
+    : Instruction(Opcode::VECTOR_BUILD, vector_type) {
+    for (auto elem : elements) {
+      operands.push_back(elem);
+    }
+  }
+};
+
+// Exception handling instruction
+class UnreachableInst : public Instruction {
+public:
+  UnreachableInst()
+    : Instruction(Opcode::UNREACHABLE, Type::void_type()) {
+    // No operands for unreachable
+  }
 };
 
 // Basic Block: sequence of instructions ending with terminator
@@ -921,6 +1118,27 @@ public:
     return result;
   }
   
+  std::shared_ptr<Register> create_urem(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<BinaryOp>(Opcode::UREM, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_srem(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<BinaryOp>(Opcode::SREM, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_frem(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<BinaryOp>(Opcode::FREM, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
   // Bitwise operations
   std::shared_ptr<Register> create_and(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
     auto inst = std::make_unique<BinaryOp>(Opcode::AND, lhs, rhs);
@@ -959,6 +1177,13 @@ public:
   
   std::shared_ptr<Register> create_ashr(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
     auto inst = std::make_unique<BinaryOp>(Opcode::ASHR, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_not(std::shared_ptr<Value> val) {
+    auto inst = std::make_unique<UnaryOp>(Opcode::NOT, val);
     auto result = inst->result_reg;
     current_block->add_instruction(std::move(inst));
     return result;
@@ -1039,6 +1264,91 @@ public:
     return result;
   }
   
+  std::shared_ptr<Register> create_icmp_sle(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<ICmpInst>(Opcode::ICMP_SLE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_icmp_sge(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<ICmpInst>(Opcode::ICMP_SGE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_icmp_ult(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<ICmpInst>(Opcode::ICMP_ULT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_icmp_ule(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<ICmpInst>(Opcode::ICMP_ULE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_icmp_ugt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<ICmpInst>(Opcode::ICMP_UGT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_icmp_uge(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<ICmpInst>(Opcode::ICMP_UGE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Floating-point comparisons
+  std::shared_ptr<Register> create_fcmp_oeq(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<FCmpInst>(Opcode::FCMP_OEQ, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fcmp_one(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<FCmpInst>(Opcode::FCMP_ONE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fcmp_olt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<FCmpInst>(Opcode::FCMP_OLT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fcmp_ole(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<FCmpInst>(Opcode::FCMP_OLE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fcmp_ogt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<FCmpInst>(Opcode::FCMP_OGT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fcmp_oge(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<FCmpInst>(Opcode::FCMP_OGE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
   // Type conversions
   std::shared_ptr<Register> create_trunc(std::shared_ptr<Value> val, Type dest_type) {
     auto inst = std::make_unique<CastInst>(Opcode::TRUNC, val, dest_type);
@@ -1068,6 +1378,63 @@ public:
     return result;
   }
   
+  // Additional type conversions
+  std::shared_ptr<Register> create_fptrunc(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::FPTRUNC, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fpext(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::FPEXT, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fptoui(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::FPTOUI, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_fptosi(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::FPTOSI, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_uitofp(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::UITOFP, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_sitofp(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::SITOFP, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_ptrtoint(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::PTRTOINT, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_inttoptr(std::shared_ptr<Value> val, Type dest_type) {
+    auto inst = std::make_unique<CastInst>(Opcode::INTTOPTR, val, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
   // Control flow
   void create_ret(std::shared_ptr<Value> val = nullptr) {
     auto inst = std::make_unique<ReturnInst>(val);
@@ -1090,6 +1457,13 @@ public:
     auto result = inst->result_reg;
     current_block->add_instruction(std::move(inst));
     return result;
+  }
+  
+  SwitchInst* create_switch(std::shared_ptr<Value> value, BasicBlock* default_dest) {
+    auto inst = std::make_unique<SwitchInst>(value, default_dest);
+    auto* raw_ptr = inst.get();
+    current_block->add_instruction(std::move(inst));
+    return raw_ptr;
   }
   
   // Advanced operations
@@ -1174,6 +1548,309 @@ public:
                                                   std::shared_ptr<Value> value,
                                                   MemoryOrdering ordering = MemoryOrdering::SEQ_CST) {
     return create_atomic_rmw(AtomicRMWOp::XCHG, ptr, value, ordering);
+  }
+  
+  // Vector operations
+  std::shared_ptr<Register> create_vector_extract(std::shared_ptr<Value> vector, std::shared_ptr<Value> index) {
+    auto inst = std::make_unique<VectorExtractInst>(vector, index);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_insert(std::shared_ptr<Value> vector, std::shared_ptr<Value> element, 
+                                                 std::shared_ptr<Value> index) {
+    auto inst = std::make_unique<VectorInsertInst>(vector, element, index);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_shuffle(std::shared_ptr<Value> vec1, std::shared_ptr<Value> vec2,
+                                                  std::shared_ptr<Value> mask) {
+    auto inst = std::make_unique<VectorShuffleInst>(vec1, vec2, mask);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Vector arithmetic operations
+  std::shared_ptr<Register> create_vector_add(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    Opcode op = lhs->type.is_vector_of_floats() ? Opcode::VFADD : Opcode::VADD;
+    auto inst = std::make_unique<VectorBinaryInst>(op, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_sub(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    Opcode op = lhs->type.is_vector_of_floats() ? Opcode::VFSUB : Opcode::VSUB;
+    auto inst = std::make_unique<VectorBinaryInst>(op, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_mul(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    Opcode op = lhs->type.is_vector_of_floats() ? Opcode::VFMUL : Opcode::VMUL;
+    auto inst = std::make_unique<VectorBinaryInst>(op, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_div(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    Opcode op = lhs->type.is_vector_of_floats() ? Opcode::VFDIV : Opcode::VDIV;
+    auto inst = std::make_unique<VectorBinaryInst>(op, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Vector bitwise operations
+  std::shared_ptr<Register> create_vector_and(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorBinaryInst>(Opcode::VAND, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_or(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorBinaryInst>(Opcode::VOR, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_xor(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorBinaryInst>(Opcode::VXOR, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_not(std::shared_ptr<Value> operand) {
+    auto inst = std::make_unique<VectorUnaryInst>(Opcode::VNOT, operand);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Vector creation and manipulation
+  std::shared_ptr<Register> create_vector_splat(std::shared_ptr<Value> scalar, Type vector_type) {
+    auto inst = std::make_unique<VectorSplatInst>(scalar, vector_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_build(const std::vector<std::shared_ptr<Value>>& elements, Type vector_type) {
+    auto inst = std::make_unique<VectorBuildInst>(elements, vector_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Vector constants
+  std::shared_ptr<ConstantVector> get_vector_constant(const std::vector<std::shared_ptr<Value>>& elements, Type vector_type) {
+    return std::make_shared<ConstantVector>(elements, vector_type);
+  }
+  
+  std::shared_ptr<ConstantVector> get_vector_splat_constant(std::shared_ptr<Value> scalar, Type vector_type) {
+    uint32_t num_elements = vector_type.get_vector_num_elements();
+    std::vector<std::shared_ptr<Value>> elements(num_elements, scalar);
+    return std::make_shared<ConstantVector>(elements, vector_type);
+  }
+  
+  // Vector comparison operations
+  std::shared_ptr<Register> create_vector_icmp_eq(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_EQ, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_ne(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_NE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_ult(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_ULT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_ule(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_ULE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_ugt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_UGT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_uge(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_UGE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_slt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_SLT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_sle(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_SLE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_sgt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_SGT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_icmp_sge(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VICMP_SGE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Vector float comparisons
+  std::shared_ptr<Register> create_vector_fcmp_oeq(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VFCMP_OEQ, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fcmp_one(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VFCMP_ONE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fcmp_olt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VFCMP_OLT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fcmp_ole(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VFCMP_OLE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fcmp_ogt(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VFCMP_OGT, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fcmp_oge(std::shared_ptr<Value> lhs, std::shared_ptr<Value> rhs) {
+    auto inst = std::make_unique<VectorCompareInst>(Opcode::VFCMP_OGE, lhs, rhs);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Vector conversion operations
+  std::shared_ptr<Register> create_vector_trunc(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VTRUNC, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_zext(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VZEXT, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_sext(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VSEXT, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fptrunc(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VFPTRUNC, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fpext(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VFPEXT, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fptoui(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VFPTOUI, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_fptosi(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VFPTOSI, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_uitofp(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VUIFP, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_sitofp(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VSIFP, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  std::shared_ptr<Register> create_vector_bitcast(std::shared_ptr<Value> value, Type dest_type) {
+    auto inst = std::make_unique<VectorConvertInst>(Opcode::VBITCAST, value, dest_type);
+    auto result = inst->result_reg;
+    current_block->add_instruction(std::move(inst));
+    return result;
+  }
+  
+  // Exception handling
+  void create_unreachable() {
+    auto inst = std::make_unique<UnreachableInst>();
+    current_block->add_instruction(std::move(inst));
   }
   
 private:

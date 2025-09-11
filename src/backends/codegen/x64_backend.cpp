@@ -1,5 +1,6 @@
 #include "x64_backend.h"
 #include "x64_register_set.h"
+#include "core/tools/syscall_constants.h"
 #include <iostream>
 #include <stdexcept>
 #include <memory>
@@ -855,6 +856,605 @@ void X64Backend::compile_instruction(const IR::Instruction& inst) {
       break;
     }
     
+    // === Phase 1: Missing Core Instructions ===
+    case IR::Opcode::NOT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      // NOT is implemented as XOR with all 1s
+      assembler->movq(dst_reg, Imm64{0xFFFFFFFFFFFFFFFFULL});
+      assembler->xorq(dst_reg, src_reg);
+      break;
+    }
+    
+    case IR::Opcode::FREM: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      // Load operands into XMM registers
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      // Calculate remainder using fmod
+      if (inst.result_type.kind == IR::TypeKind::F32) {
+        assembler->movss(XMM0, lhs_reg);
+        assembler->movss(XMM1, rhs_reg);
+        // For now, use a simple approximation - in a real implementation,
+        // this would call the math library's fmod function
+        assembler->divss(XMM0, XMM1);
+        assembler->cvtss2si(AX, XMM0);  // Convert to int (truncate)
+        assembler->cvtsi2ss(XMM0, AX);   // Convert back to float
+        assembler->mulss(XMM0, XMM1);     // Multiply by divisor
+        assembler->subss(XMM0, lhs_reg);  // Subtract from dividend
+        assembler->movss(dst_reg, XMM0);
+      } else {
+        assembler->movq(XMM0, lhs_reg);
+        assembler->movq(XMM1, rhs_reg);
+        assembler->divsd(XMM0, XMM1);
+        assembler->cvtsd2si(AX, XMM0);
+        assembler->cvtsi2sd(XMM0, AX);
+        assembler->mulsd(XMM0, XMM1);
+        assembler->subsd(XMM0, lhs_reg);
+        assembler->movq(dst_reg, XMM0);
+      }
+      break;
+    }
+    
+    case IR::Opcode::INVOKE: {
+      // INVOKE is like CALL but with exception handling
+      // For now, treat it the same as CALL
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto func_ptr = inst.operands[0];
+      
+      // Save caller-saved registers
+      assembler->pushq(AX);
+      assembler->pushq(CX);
+      assembler->pushq(DX);
+      assembler->pushq(SI);
+      assembler->pushq(DI);
+      assembler->pushq(R8);
+      assembler->pushq(R9);
+      assembler->pushq(R10);
+      assembler->pushq(R11);
+      
+      // Set up arguments
+      for (size_t i = 1; i < inst.operands.size(); ++i) {
+        auto arg_reg = get_operand_register(inst.operands[i]);
+        switch (i - 1) {
+          case 0: assembler->movq(DI, arg_reg); break;
+          case 1: assembler->movq(SI, arg_reg); break;
+          case 2: assembler->movq(DX, arg_reg); break;
+          case 3: assembler->movq(CX, arg_reg); break;
+          case 4: assembler->movq(R8, arg_reg); break;
+          case 5: assembler->movq(R9, arg_reg); break;
+          default: break; // Additional args would go on stack
+        }
+      }
+      
+      // Call function
+      if (func_ptr->kind == IR::Value::Kind::CONSTANT) {
+        auto const_val = std::static_pointer_cast<IR::ConstantInt>(func_ptr);
+        assembler->call(Imm32{static_cast<uint32_t>(const_val->value)});
+      } else {
+        auto func_reg = get_operand_register(func_ptr);
+        // For indirect calls, we need to use a different approach
+        // This is a placeholder - would need proper call instruction for register
+        assembler->call(Imm32{0}); // Placeholder
+      }
+      
+      // Restore caller-saved registers
+      assembler->popq(R11);
+      assembler->popq(R10);
+      assembler->popq(R9);
+      assembler->popq(R8);
+      assembler->popq(DI);
+      assembler->popq(SI);
+      assembler->popq(DX);
+      assembler->popq(CX);
+      assembler->popq(AX);
+      
+      if (inst.result_type.kind != IR::TypeKind::VOID) {
+        assembler->movq(dst_reg, AX);
+      }
+      break;
+    }
+    
+    case IR::Opcode::SWITCH: {
+      // Multi-way branch instruction
+      auto value_reg = get_operand_register(inst.operands[0]);
+      auto default_block = inst.extra_block;
+      
+      // For now, implement as a simple conditional branch
+      // In a real implementation, this would use a jump table
+      assembler->movq(AX, value_reg);
+      assembler->cmpq(AX, Imm32{0});
+      // For now, just jump to default block
+      // In a real implementation, this would use a jump table
+      
+      // Default to unconditional branch to first case
+      if (!inst.operands.empty()) {
+        // For now, just use a placeholder jump
+        // In a real implementation, this would use proper label handling
+      }
+      break;
+    }
+    
+    case IR::Opcode::LANDINGPAD: {
+      // Exception handling landing pad
+      // For now, just emit a nop - exception handling is complex
+      assembler->nop();
+      break;
+    }
+    
+    case IR::Opcode::RESUME: {
+      // Resume exception handling
+      // For now, just emit a nop
+      assembler->nop();
+      break;
+    }
+    
+    case IR::Opcode::UNREACHABLE: {
+      // Mark unreachable code
+      // Generate invalid instruction exception
+      assembler->int3(); // Use int3 instead of ud2
+      break;
+    }
+    
+    // === Phase 1: Type Conversion Instructions ===
+    case IR::Opcode::FPTRUNC: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      if (inst.result_type.kind == IR::TypeKind::F32) {
+        assembler->cvtsd2ss(XMM0, src_reg);
+        assembler->movss(dst_reg, XMM0);
+      } else {
+        assembler->movss(dst_reg, src_reg);
+      }
+      break;
+    }
+    
+    case IR::Opcode::FPEXT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      if (inst.result_type.kind == IR::TypeKind::F64) {
+        assembler->cvtss2sd(XMM0, src_reg);
+        assembler->movq(dst_reg, XMM0);
+      } else {
+        assembler->movq(dst_reg, src_reg);
+      }
+      break;
+    }
+    
+    case IR::Opcode::FPTOUI: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->cvtss2si(dst_reg, src_reg);
+      } else {
+        assembler->cvtsd2si(dst_reg, src_reg);
+      }
+      break;
+    }
+    
+    case IR::Opcode::FPTOSI: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->cvtss2si(dst_reg, src_reg);
+      } else {
+        assembler->cvtsd2si(dst_reg, src_reg);
+      }
+      break;
+    }
+    
+    case IR::Opcode::UITOFP: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      if (inst.result_type.kind == IR::TypeKind::F32) {
+        assembler->cvtsi2ss(XMM0, src_reg);
+        assembler->movss(dst_reg, XMM0);
+      } else {
+        assembler->cvtsi2sd(XMM0, src_reg);
+        assembler->movq(dst_reg, XMM0);
+      }
+      break;
+    }
+    
+    case IR::Opcode::SITOFP: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      if (inst.result_type.kind == IR::TypeKind::F32) {
+        assembler->cvtsi2ss(XMM0, src_reg);
+        assembler->movss(dst_reg, XMM0);
+      } else {
+        assembler->cvtsi2sd(XMM0, src_reg);
+        assembler->movq(dst_reg, XMM0);
+      }
+      break;
+    }
+    
+    case IR::Opcode::PTRTOINT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      assembler->movq(dst_reg, src_reg);
+      break;
+    }
+    
+    case IR::Opcode::INTTOPTR: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      assembler->movq(dst_reg, src_reg);
+      break;
+    }
+    
+    // === Phase 1: Vector Operations ===
+    case IR::Opcode::VECTOR_EXTRACT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto vector_reg = get_operand_register(inst.operands[0]);
+      auto index_val = std::static_pointer_cast<IR::ConstantInt>(inst.operands[1]);
+      
+      // Extract element at given index from vector
+      // For now, implement as a simple load with offset
+      assembler->movq(dst_reg, vector_reg);
+      assembler->addq(dst_reg, Imm32{static_cast<uint32_t>(index_val->value * 4)}); // Assuming 4-byte elements
+      assembler->movq(dst_reg, dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::VECTOR_INSERT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto vector_reg = get_operand_register(inst.operands[0]);
+      auto value_reg = get_operand_register(inst.operands[1]);
+      auto index_val = std::static_pointer_cast<IR::ConstantInt>(inst.operands[2]);
+      
+      // Insert value at given index into vector
+      assembler->movq(dst_reg, vector_reg);
+      assembler->addq(dst_reg, Imm32{static_cast<uint32_t>(index_val->value * 4)}); // Assuming 4-byte elements
+      assembler->movq(dst_reg, value_reg);
+      break;
+    }
+    
+    case IR::Opcode::VECTOR_SHUFFLE: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto vector1_reg = get_operand_register(inst.operands[0]);
+      auto vector2_reg = get_operand_register(inst.operands[1]);
+      
+      // For now, implement as a simple copy of first vector
+      // In a real implementation, this would use SSE shuffle instructions
+      assembler->movq(dst_reg, vector1_reg);
+      break;
+    }
+    
+    // === Vector Arithmetic Operations (SSE/AVX) ===
+    case IR::Opcode::VADD: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      // Move first operand to destination, then add second operand
+      // For now, use basic integer operations - would use paddd/paddq for proper SIMD
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->addq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VSUB: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->subq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VMUL: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->imulq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VFADD: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      // Use SSE addps/addpd for vector float operations
+      // For now, fallback to scalar operations
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->addq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VFSUB: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->subq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VFMUL: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->imulq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VAND: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->andq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VOR: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->orq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VXOR: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->xorq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    case IR::Opcode::VNOT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      assembler->movq(dst_reg, src_reg);
+      assembler->notq(dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::VECTOR_SPLAT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto scalar_reg = get_operand_register(inst.operands[0]);
+      
+      // For now, just copy the scalar value
+      // In a real implementation, this would broadcast the scalar to all vector lanes
+      assembler->movq(dst_reg, scalar_reg);
+      break;
+    }
+    
+    case IR::Opcode::VECTOR_BUILD: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      
+      // For now, just use the first element
+      // In a real implementation, this would pack all elements into a vector register
+      if (!inst.operands.empty()) {
+        auto first_elem_reg = get_operand_register(inst.operands[0]);
+        assembler->movq(dst_reg, first_elem_reg);
+      }
+      break;
+    }
+    
+    // Vector comparison operations
+    case IR::Opcode::VICMP_EQ: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      // For now, implement as scalar comparison
+      // In a real implementation, this would use SSE/AVX vector compare instructions
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->cmpq(dst_reg, rhs_reg);
+      // Note: setcc instructions would be used in real implementation
+      break;
+    }
+    
+    case IR::Opcode::VICMP_NE:
+    case IR::Opcode::VICMP_ULT:
+    case IR::Opcode::VICMP_ULE:
+    case IR::Opcode::VICMP_UGT:
+    case IR::Opcode::VICMP_UGE:
+    case IR::Opcode::VICMP_SLT:
+    case IR::Opcode::VICMP_SLE:
+    case IR::Opcode::VICMP_SGT:
+    case IR::Opcode::VICMP_SGE: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      // For now, implement as scalar comparison
+      // In a real implementation, this would use SSE/AVX vector compare instructions
+      assembler->movq(dst_reg, lhs_reg);
+      assembler->cmpq(dst_reg, rhs_reg);
+      break;
+    }
+    
+    // Vector float comparisons
+    case IR::Opcode::VFCMP_OEQ:
+    case IR::Opcode::VFCMP_ONE:
+    case IR::Opcode::VFCMP_OLT:
+    case IR::Opcode::VFCMP_OLE:
+    case IR::Opcode::VFCMP_OGT:
+    case IR::Opcode::VFCMP_OGE: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      // For now, implement as simple scalar float comparison
+      // In a real implementation, this would use SSE/AVX float compare instructions
+      assembler->movq(dst_reg, lhs_reg);
+      break;
+    }
+    
+    // Vector conversion operations
+    case IR::Opcode::VTRUNC:
+    case IR::Opcode::VZEXT:
+    case IR::Opcode::VSEXT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      // For now, implement as simple move
+      // In a real implementation, this would use SSE/AVX conversion instructions
+      assembler->movq(dst_reg, src_reg);
+      break;
+    }
+    
+    case IR::Opcode::VFPTRUNC:
+    case IR::Opcode::VFPEXT:
+    case IR::Opcode::VFPTOUI:
+    case IR::Opcode::VFPTOSI:
+    case IR::Opcode::VUIFP:
+    case IR::Opcode::VSIFP: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      // For now, implement as simple move
+      // In a real implementation, this would use SSE/AVX conversion instructions
+      assembler->movq(dst_reg, src_reg);
+      break;
+    }
+    
+    case IR::Opcode::VBITCAST: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto src_reg = get_operand_register(inst.operands[0]);
+      
+      // Bitcast is just a register copy
+      assembler->movq(dst_reg, src_reg);
+      break;
+    }
+    
+    // === Phase 1: Missing Float Comparisons ===
+    case IR::Opcode::FCMP_UEQ: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->comiss(XMM0, XMM1);
+      } else {
+        assembler->comisd(XMM0, XMM1);
+      }
+      assembler->setcc(nextgen::jet::x64::Equal, dst_reg);
+      assembler->movzxb(dst_reg, dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::FCMP_UNE: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->comiss(XMM0, XMM1);
+      } else {
+        assembler->comisd(XMM0, XMM1);
+      }
+      assembler->setcc(nextgen::jet::x64::NotEqual, dst_reg);
+      assembler->movzxb(dst_reg, dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::FCMP_ULT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->comiss(XMM0, XMM1);
+      } else {
+        assembler->comisd(XMM0, XMM1);
+      }
+      assembler->setcc(nextgen::jet::x64::Below, dst_reg);
+      assembler->movzxb(dst_reg, dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::FCMP_ULE: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->comiss(XMM0, XMM1);
+      } else {
+        assembler->comisd(XMM0, XMM1);
+      }
+      assembler->setcc(nextgen::jet::x64::BelowOrEqual, dst_reg);
+      assembler->movzxb(dst_reg, dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::FCMP_UGT: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->comiss(XMM0, XMM1);
+      } else {
+        assembler->comisd(XMM0, XMM1);
+      }
+      assembler->setcc(nextgen::jet::x64::Above, dst_reg);
+      assembler->movzxb(dst_reg, dst_reg);
+      break;
+    }
+    
+    case IR::Opcode::FCMP_UGE: {
+      auto dst_reg = get_register_for_type(inst.result_type);
+      auto lhs_reg = get_operand_register(inst.operands[0]);
+      auto rhs_reg = get_operand_register(inst.operands[1]);
+      
+      assembler->movq(XMM0, lhs_reg);
+      assembler->movq(XMM1, rhs_reg);
+      
+      if (inst.operands[0]->type.kind == IR::TypeKind::F32) {
+        assembler->comiss(XMM0, XMM1);
+      } else {
+        assembler->comisd(XMM0, XMM1);
+      }
+      assembler->setcc(nextgen::jet::x64::AboveOrEqual, dst_reg);
+      assembler->movzxb(dst_reg, dst_reg);
+      break;
+    }
+    
     default:
       // Placeholder for any remaining unimplemented instructions
       assembler->nop();
@@ -1159,11 +1759,13 @@ nextgen::jet::x64::Register X64Backend::get_or_alloc_register(const IR::Value& v
 }
 
 nextgen::jet::x64::Register X64Backend::get_register_for_type(const IR::Type& type) {
-  // Simple type-based register selection
-  if (type.is_integer() || type.is_pointer()) {
-    return AX; // Use AX for integers and pointers
+  // Type-based register selection with vector support
+  if (type.is_vector()) {
+    return XMM0; // Use XMM0 for vector types (128-bit SSE for now)
   } else if (type.is_float()) {
-    return XMM0; // Use XMM0 for floats
+    return XMM0; // Use XMM0 for floats (128-bit SSE)
+  } else if (type.is_integer() || type.is_pointer()) {
+    return AX; // Use AX for integers and pointers
   }
   return AX; // Default
 }
@@ -1316,13 +1918,13 @@ void X64Backend::emit_syscall_exit(int32_t code) {
   uint64_t syscall_number;
   switch (target_platform) {
     case TargetPlatform::MACOS:
-      syscall_number = 0x2000001ULL; // Darwin SYS_exit
+      syscall_number = SyscallConstants::get_platform_syscall_number(SyscallConstants::MACOS_SYS_EXIT, true);
       break;
     case TargetPlatform::LINUX:
-      syscall_number = 60ULL; // Linux SYS_exit
+      syscall_number = SyscallConstants::get_platform_syscall_number(SyscallConstants::LINUX_SYS_EXIT, false);
       break;
     default:
-      syscall_number = 0x2000001ULL; // Default to Darwin
+      syscall_number = SyscallConstants::get_platform_syscall_number(SyscallConstants::MACOS_SYS_EXIT, true);
       break;
   }
   
@@ -1335,13 +1937,13 @@ void X64Backend::emit_syscall_write(const std::string& message) {
   uint64_t syscall_number;
   switch (target_platform) {
     case TargetPlatform::MACOS:
-      syscall_number = 0x2000004ULL; // Darwin SYS_write
+      syscall_number = SyscallConstants::get_platform_syscall_number(SyscallConstants::MACOS_SYS_WRITE, true);
       break;
     case TargetPlatform::LINUX:
-      syscall_number = 1ULL; // Linux SYS_write
+      syscall_number = SyscallConstants::get_platform_syscall_number(SyscallConstants::LINUX_SYS_WRITE, false);
       break;
     default:
-      syscall_number = 0x2000004ULL; // Default to Darwin
+      syscall_number = SyscallConstants::get_platform_syscall_number(SyscallConstants::MACOS_SYS_WRITE, true);
       break;
   }
   
@@ -1420,13 +2022,13 @@ void X64Backend::emit_syscall(uint32_t syscall_number, const std::vector<std::sh
   uint64_t platform_syscall_number;
   switch (target_platform) {
     case TargetPlatform::MACOS:
-      platform_syscall_number = 0x2000000ULL | (uint64_t)syscall_number; // Darwin syscall offset
+      platform_syscall_number = SyscallConstants::get_platform_syscall_number(syscall_number, true);
       break;
     case TargetPlatform::LINUX:
-      platform_syscall_number = (uint64_t)syscall_number; // Linux syscalls are direct
+      platform_syscall_number = SyscallConstants::get_platform_syscall_number(syscall_number, false);
       break;
     default:
-      platform_syscall_number = 0x2000000ULL | (uint64_t)syscall_number; // Default to Darwin
+      platform_syscall_number = SyscallConstants::get_platform_syscall_number(syscall_number, true); // Default to Darwin
       break;
   }
   

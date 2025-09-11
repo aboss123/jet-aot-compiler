@@ -12,6 +12,31 @@ using ushort = uint16_t;
 using uint = uint32_t;
 using ulong = uint64_t;
 
+// Type-aware instruction selection
+enum DataType : ubyte {
+  DT_I8,     // 8-bit signed integer
+  DT_U8,     // 8-bit unsigned integer
+  DT_I16,    // 16-bit signed integer
+  DT_U16,    // 16-bit unsigned integer
+  DT_I32,    // 32-bit signed integer
+  DT_U32,    // 32-bit unsigned integer
+  DT_I64,    // 64-bit signed integer
+  DT_U64,    // 64-bit unsigned integer
+  DT_F32,    // 32-bit float
+  DT_F64,    // 64-bit double
+  DT_PTR     // Pointer (64-bit on ARM64)
+};
+
+struct TypeInfo {
+  DataType type;
+  ubyte size_bits;      // Size in bits (8, 16, 32, 64)
+  ubyte arm64_sz;       // ARM64 size encoding (0-3)
+  bool is_signed;
+  bool is_float;
+  
+  static TypeInfo from_data_type(DataType dt);
+};
+
 // ARM64 Registers
 enum Register : ubyte {
   // General purpose registers (64-bit)
@@ -116,12 +141,27 @@ public:
   void and_reg(Register dst, Register src1, Register src2);
   void orr_imm(Register dst, Register src, uint64_t imm);
   void orr_reg(Register dst, Register src1, Register src2);
+  void eor_imm(Register dst, Register src, uint64_t imm);
   void eor_reg(Register dst, Register src1, Register src2);
   
   // Memory operations
   void ldr_imm(Register dst, Register base, int32_t offset = 0);
   void str_imm(Register src, Register base, int32_t offset = 0);
   void ldr_literal(Register dst, Label& label);  // PC-relative load
+  
+  // Advanced addressing modes
+  void ldr_reg(Register dst, Register base, Register offset, bool extend = false);  // [base, offset_reg]
+  void str_reg(Register src, Register base, Register offset, bool extend = false);  // [base, offset_reg]
+  void ldr_pre_index(Register dst, Register base, int32_t offset);   // [base, #offset]!
+  void str_pre_index(Register src, Register base, int32_t offset);   // [base, #offset]!
+  void ldr_post_index(Register dst, Register base, int32_t offset);  // [base], #offset
+  void str_post_index(Register src, Register base, int32_t offset);  // [base], #offset
+  
+  // Type-aware memory operations
+  void ldr_typed(Register dst, Register base, int32_t offset, DataType type);
+  void str_typed(Register src, Register base, int32_t offset, DataType type);
+  void ldrx_typed(Register dst, Register base, int32_t offset, DataType type);  // Sign-extend load
+  void strx_typed(Register src, Register base, int32_t offset, DataType type);  // Type-specific store
   
   // Branches
   void b(Label& label);                          // Unconditional branch
@@ -255,6 +295,7 @@ private:
   uint32_t encode_logical_imm(uint64_t imm, bool is_64bit) const;
   uint32_t reg_code(Register reg) const;
   bool is_64bit_reg(Register reg) const;
+  void generate_movz_movk_sequence(Register dst, uint64_t imm, bool is_64bit);
 };
 
 }}} // namespace nextgen::jet::arm64

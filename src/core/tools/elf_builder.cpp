@@ -36,7 +36,10 @@ static constexpr uint16_t EM_X86_64     = 62; // AMD x86-64 architecture
 static constexpr uint16_t EM_AARCH64    = 183;// ARM aarch64
 
 static constexpr uint32_t PT_LOAD       = 1;  // Loadable program segment
+static constexpr uint32_t PT_DYNAMIC    = 2;  // Dynamic linking information
+static constexpr uint32_t PT_INTERP     = 3;  // Program interpreter
 static constexpr uint32_t PT_GNU_STACK  = 0x6474e551; // GNU stack permissions
+static constexpr uint32_t PT_GNU_RELRO  = 0x6474e552; // GNU read-only after relocation
 static constexpr uint32_t PF_X          = 1;  // Execute
 static constexpr uint32_t PF_W          = 2;  // Write
 static constexpr uint32_t PF_R          = 4;  // Read
@@ -46,6 +49,10 @@ static constexpr uint32_t SHT_PROGBITS  = 1;  // Program data
 static constexpr uint32_t SHT_SYMTAB    = 2;  // Symbol table
 static constexpr uint32_t SHT_STRTAB    = 3;  // String table
 static constexpr uint32_t SHT_RELA      = 4;  // Relocation entries with addends
+static constexpr uint32_t SHT_HASH      = 5;  // Symbol hash table
+static constexpr uint32_t SHT_DYNAMIC   = 6;  // Dynamic linking information
+static constexpr uint32_t SHT_DYNSYM    = 11; // Dynamic linker symbol table
+static constexpr uint32_t SHT_GNU_HASH  = 0x6ffffff6; // GNU-style hash table
 
 static constexpr uint32_t SHF_WRITE     = 1;  // Writable
 static constexpr uint32_t SHF_ALLOC     = 2;  // Occupies memory during execution
@@ -78,6 +85,24 @@ static constexpr uint32_t R_AARCH64_LDST64_ABS_LO12_NC = 286; // Direct LDST64 i
 static constexpr uint32_t R_AARCH64_LDST128_ABS_LO12_NC = 299; // Direct LDST128 immediate
 static constexpr uint32_t R_AARCH64_JUMP26 = 282;         // PC-relative 26 bit
 static constexpr uint32_t R_AARCH64_CALL26 = 283;         // PC-relative 26 bit
+
+// Dynamic linking tags
+static constexpr uint32_t DT_NULL       = 0;  // Marks end of dynamic array
+static constexpr uint32_t DT_NEEDED     = 1;  // String table offset of needed library
+static constexpr uint32_t DT_PLTRELSZ   = 2;  // Size of PLT relocations
+static constexpr uint32_t DT_PLTGOT     = 3;  // Address of PLT GOT
+static constexpr uint32_t DT_HASH       = 4;  // Address of symbol hash table
+static constexpr uint32_t DT_STRTAB     = 5;  // Address of string table
+static constexpr uint32_t DT_SYMTAB     = 6;  // Address of symbol table
+static constexpr uint32_t DT_RELA       = 7;  // Address of RELA relocs
+static constexpr uint32_t DT_RELASZ     = 8;  // Size of RELA relocs
+static constexpr uint32_t DT_RELAENT    = 9;  // Size of one RELA reloc
+static constexpr uint32_t DT_STRSZ      = 10; // Size of string table
+static constexpr uint32_t DT_SYMENT     = 11; // Size of one symbol table entry
+static constexpr uint32_t DT_SONAME     = 14; // String table offset of shared object name
+static constexpr uint32_t DT_RPATH      = 15; // String table offset of library search path
+static constexpr uint32_t DT_RUNPATH    = 29; // String table offset of library search path
+static constexpr uint32_t DT_GNU_HASH   = 0x6ffffef5; // Address of GNU hash table
 
 static inline uint64_t align_up(uint64_t value, uint64_t alignment) {
   return (value + alignment - 1) & ~(alignment - 1);
@@ -138,6 +163,14 @@ struct Elf64_Rela {
   uint64_t r_offset;
   uint64_t r_info;
   int64_t  r_addend;
+};
+
+struct Elf64_Dyn {
+  int64_t  d_tag;   // Dynamic entry type
+  union {
+    uint64_t d_val; // Integer value
+    uint64_t d_ptr; // Program virtual address
+  } d_un;
 };
 #pragma pack(pop)
 
@@ -236,6 +269,207 @@ bool ELFBuilder64::write_executable(const char* path, const uint8_t* buffer, uin
   f.close();
 
   // Make executable with proper permissions
+  chmod(path, 0755);
+  return true;
+}
+
+bool ELFBuilder64::write_dynamic_executable(const char* path,
+                                            const uint8_t* buffer,
+                                            uint32_t size,
+                                            const std::vector<std::string>& libraries,
+                                            const char* interpreter,
+                                            uint32_t entry_offset,
+                                            ELFArch arch) {
+  if (buffer == nullptr || size == 0) return false;
+
+  // Default interpreter paths for different architectures
+  const char* default_interp = nullptr;
+  if (!interpreter) {
+    if (arch == ELFArch::ARM64) {
+      default_interp = "/lib/ld-linux-aarch64.so.1";
+    } else {
+      default_interp = "/lib64/ld-linux-x86-64.so.2";
+    }
+  } else {
+    default_interp = interpreter;
+  }
+
+  // Architecture-specific configuration
+  uint64_t page_size = (arch == ELFArch::ARM64) ? 0x10000 : 0x1000;
+  uint64_t load_addr = 0x400000;
+
+  // Build dynamic string table
+  std::vector<char> dynstr;
+  dynstr.push_back('\0'); // Empty string at index 0
+
+  // Add interpreter path
+  uint32_t interp_idx = dynstr.size();
+  dynstr.insert(dynstr.end(), default_interp, default_interp + std::strlen(default_interp) + 1);
+
+  // Add library names for DT_NEEDED
+  std::vector<uint32_t> lib_indices;
+  for (const auto& lib : libraries) {
+    lib_indices.push_back(dynstr.size());
+    dynstr.insert(dynstr.end(), lib.begin(), lib.end());
+    dynstr.push_back('\0');
+  }
+
+  // Build dynamic section
+  std::vector<Elf64_Dyn> dynamic;
+  
+  // Add DT_NEEDED entries for libraries
+  for (uint32_t lib_idx : lib_indices) {
+    Elf64_Dyn entry = {};
+    entry.d_tag = DT_NEEDED;
+    entry.d_un.d_val = lib_idx;
+    dynamic.push_back(entry);
+  }
+
+  // Add basic dynamic entries
+  if (!dynstr.empty()) {
+    Elf64_Dyn strtab_entry = {};
+    strtab_entry.d_tag = DT_STRTAB;
+    strtab_entry.d_un.d_ptr = 0; // Will be filled later
+    dynamic.push_back(strtab_entry);
+
+    Elf64_Dyn strsz_entry = {};
+    strsz_entry.d_tag = DT_STRSZ;
+    strsz_entry.d_un.d_val = dynstr.size();
+    dynamic.push_back(strsz_entry);
+  }
+
+  // Null terminator
+  Elf64_Dyn null_entry = {};
+  null_entry.d_tag = DT_NULL;
+  dynamic.push_back(null_entry);
+
+  // Calculate layout
+  uint64_t ehdr_size = sizeof(Elf64_Ehdr);
+  uint64_t phdr_count = 4; // LOAD, DYNAMIC, INTERP, GNU_STACK
+  uint64_t phdr_size = phdr_count * sizeof(Elf64_Phdr);
+  
+  uint64_t interp_offset = align_up(ehdr_size + phdr_size, 8);
+  uint64_t interp_size = std::strlen(default_interp) + 1;
+  
+  uint64_t dynstr_offset = align_up(interp_offset + interp_size, 8);
+  uint64_t dynamic_offset = align_up(dynstr_offset + dynstr.size(), 8);
+  uint64_t code_offset = align_up(dynamic_offset + dynamic.size() * sizeof(Elf64_Dyn), page_size);
+
+  // ELF header
+  Elf64_Ehdr ehdr = {};
+  memset(&ehdr, 0, sizeof(ehdr));
+
+  ehdr.e_ident[EI_MAG0] = ELFMAG0;
+  ehdr.e_ident[EI_MAG1] = ELFMAG1;
+  ehdr.e_ident[EI_MAG2] = ELFMAG2;
+  ehdr.e_ident[EI_MAG3] = ELFMAG3;
+  ehdr.e_ident[EI_CLASS] = ELFCLASS64;
+  ehdr.e_ident[EI_DATA] = ELFDATA2LSB;
+  ehdr.e_ident[EI_VERSION] = EV_CURRENT;
+  ehdr.e_ident[EI_OSABI] = ELFOSABI_SYSV;
+
+  ehdr.e_type = ET_EXEC;
+  ehdr.e_machine = (arch == ELFArch::ARM64) ? EM_AARCH64 : EM_X86_64;
+  ehdr.e_version = EV_CURRENT;
+  ehdr.e_entry = load_addr + code_offset + entry_offset;
+  ehdr.e_phoff = ehdr_size;
+  ehdr.e_shoff = 0; // No section headers for simple dynamic executable
+  ehdr.e_flags = 0;
+  ehdr.e_ehsize = sizeof(Elf64_Ehdr);
+  ehdr.e_phentsize = sizeof(Elf64_Phdr);
+  ehdr.e_phnum = phdr_count;
+  ehdr.e_shentsize = 0;
+  ehdr.e_shnum = 0;
+  ehdr.e_shstrndx = 0;
+
+  // Update dynamic entries with actual addresses
+  for (auto& dyn : dynamic) {
+    if (dyn.d_tag == DT_STRTAB) {
+      dyn.d_un.d_ptr = load_addr + dynstr_offset;
+    }
+  }
+
+  // Program headers
+  std::vector<Elf64_Phdr> phdrs(phdr_count);
+
+  // LOAD segment (entire file)
+  phdrs[0].p_type = PT_LOAD;
+  phdrs[0].p_flags = PF_R | PF_X;
+  phdrs[0].p_offset = 0;
+  phdrs[0].p_vaddr = load_addr;
+  phdrs[0].p_paddr = load_addr;
+  phdrs[0].p_filesz = code_offset + size;
+  phdrs[0].p_memsz = code_offset + size;
+  phdrs[0].p_align = page_size;
+
+  // DYNAMIC segment
+  phdrs[1].p_type = PT_DYNAMIC;
+  phdrs[1].p_flags = PF_R;
+  phdrs[1].p_offset = dynamic_offset;
+  phdrs[1].p_vaddr = load_addr + dynamic_offset;
+  phdrs[1].p_paddr = load_addr + dynamic_offset;
+  phdrs[1].p_filesz = dynamic.size() * sizeof(Elf64_Dyn);
+  phdrs[1].p_memsz = dynamic.size() * sizeof(Elf64_Dyn);
+  phdrs[1].p_align = 8;
+
+  // INTERP segment
+  phdrs[2].p_type = PT_INTERP;
+  phdrs[2].p_flags = PF_R;
+  phdrs[2].p_offset = interp_offset;
+  phdrs[2].p_vaddr = load_addr + interp_offset;
+  phdrs[2].p_paddr = load_addr + interp_offset;
+  phdrs[2].p_filesz = interp_size;
+  phdrs[2].p_memsz = interp_size;
+  phdrs[2].p_align = 1;
+
+  // GNU_STACK segment
+  phdrs[3].p_type = PT_GNU_STACK;
+  phdrs[3].p_flags = PF_R | PF_W;
+  phdrs[3].p_offset = 0;
+  phdrs[3].p_vaddr = 0;
+  phdrs[3].p_paddr = 0;
+  phdrs[3].p_filesz = 0;
+  phdrs[3].p_memsz = 0;
+  phdrs[3].p_align = (arch == ELFArch::ARM64) ? 0x10 : 0x8;
+
+  // Build output file
+  std::vector<uint8_t> out;
+  auto emit = [&](const void* p, size_t n) {
+    const uint8_t* b = (const uint8_t*)p;
+    out.insert(out.end(), b, b + n);
+  };
+
+  // Emit ELF header
+  emit(&ehdr, sizeof(ehdr));
+
+  // Emit program headers
+  emit(phdrs.data(), phdrs.size() * sizeof(Elf64_Phdr));
+
+  // Pad to interpreter
+  while (out.size() < interp_offset) out.push_back(0);
+  emit(default_interp, interp_size);
+
+  // Pad to dynamic string table
+  while (out.size() < dynstr_offset) out.push_back(0);
+  emit(dynstr.data(), dynstr.size());
+
+  // Pad to dynamic section
+  while (out.size() < dynamic_offset) out.push_back(0);
+  emit(dynamic.data(), dynamic.size() * sizeof(Elf64_Dyn));
+
+  // Pad to code section
+  while (out.size() < code_offset) out.push_back(0);
+
+  // Emit code
+  emit(buffer, size);
+
+  // Write to file
+  std::ofstream f(path, std::ios::binary);
+  if (!f) return false;
+  f.write((const char*)out.data(), (std::streamsize)out.size());
+  f.close();
+
+  // Make executable
   chmod(path, 0755);
   return true;
 }

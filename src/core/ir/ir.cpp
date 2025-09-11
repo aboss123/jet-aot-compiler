@@ -233,6 +233,379 @@ std::vector<std::string> SafetyChecker::validate_instruction_detailed(const Inst
       }
       break;
     }
+    case Opcode::UDIV:
+    case Opcode::SDIV:
+    case Opcode::UREM:
+    case Opcode::SREM: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("Division/remainder requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto type1 = inst.operands[0]->type;
+        auto type2 = inst.operands[1]->type;
+        if (type1.kind != type2.kind) {
+          errors.push_back("Division/remainder operands must have same type");
+        }
+        if (!type1.is_integer()) {
+          errors.push_back("Division/remainder operands must be integer types");
+        }
+      }
+      break;
+    }
+    case Opcode::FADD:
+    case Opcode::FSUB:
+    case Opcode::FMUL:
+    case Opcode::FDIV:
+    case Opcode::FREM: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("Floating-point arithmetic requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto type1 = inst.operands[0]->type;
+        auto type2 = inst.operands[1]->type;
+        if (type1.kind != type2.kind) {
+          errors.push_back("Floating-point arithmetic operands must have same type");
+        }
+        if (!type1.is_float()) {
+          errors.push_back("Floating-point arithmetic operands must be float types");
+        }
+      }
+      break;
+    }
+    case Opcode::AND:
+    case Opcode::OR:
+    case Opcode::XOR: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("Bitwise operation requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto type1 = inst.operands[0]->type;
+        auto type2 = inst.operands[1]->type;
+        if (type1.kind != type2.kind) {
+          errors.push_back("Bitwise operation operands must have same type");
+        }
+        if (!type1.is_integer()) {
+          errors.push_back("Bitwise operation operands must be integer types");
+        }
+      }
+      break;
+    }
+    case Opcode::SHL:
+    case Opcode::LSHR:
+    case Opcode::ASHR: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("Shift operation requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto type1 = inst.operands[0]->type;
+        auto type2 = inst.operands[1]->type;
+        if (!type1.is_integer()) {
+          errors.push_back("Shift operation first operand must be integer type");
+        }
+        if (!type2.is_integer()) {
+          errors.push_back("Shift operation second operand must be integer type");
+        }
+      }
+      break;
+    }
+    case Opcode::NOT: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("NOT operation requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_integer()) {
+        errors.push_back("NOT operation operand must be integer type");
+      }
+      break;
+    }
+    case Opcode::ALLOCA: {
+      if (inst.operands.size() > 1) {
+        errors.push_back("ALLOCA requires at most 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() == 1 && !inst.operands[0]->type.is_integer()) {
+        errors.push_back("ALLOCA array size operand must be integer type");
+      }
+      break;
+    }
+    case Opcode::EXTRACTVALUE: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("EXTRACTVALUE requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_aggregate()) {
+        errors.push_back("EXTRACTVALUE operand must be aggregate type");
+      }
+      break;
+    }
+    case Opcode::INSERTVALUE: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("INSERTVALUE requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 1 && !inst.operands[0]->type.is_aggregate()) {
+        errors.push_back("INSERTVALUE first operand must be aggregate type");
+      }
+      break;
+    }
+    case Opcode::GEP: {
+      if (inst.operands.size() < 1) {
+        errors.push_back("GEP requires at least 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !is_valid_pointer_type(inst.operands[0]->type)) {
+        errors.push_back("GEP first operand must be pointer type");
+      }
+      for (size_t i = 1; i < inst.operands.size(); ++i) {
+        if (!inst.operands[i]->type.is_integer()) {
+          errors.push_back("GEP index operand " + std::to_string(i) + " must be integer type");
+        }
+      }
+      break;
+    }
+    case Opcode::ICMP_EQ:
+    case Opcode::ICMP_NE:
+    case Opcode::ICMP_ULT:
+    case Opcode::ICMP_ULE:
+    case Opcode::ICMP_UGT:
+    case Opcode::ICMP_UGE:
+    case Opcode::ICMP_SLT:
+    case Opcode::ICMP_SLE:
+    case Opcode::ICMP_SGT:
+    case Opcode::ICMP_SGE: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("Integer comparison requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto type1 = inst.operands[0]->type;
+        auto type2 = inst.operands[1]->type;
+        if (type1.kind != type2.kind) {
+          errors.push_back("Integer comparison operands must have same type");
+        }
+        if (!type1.is_integer()) {
+          errors.push_back("Integer comparison operands must be integer types");
+        }
+      }
+      break;
+    }
+    case Opcode::FCMP_OEQ:
+    case Opcode::FCMP_ONE:
+    case Opcode::FCMP_OLT:
+    case Opcode::FCMP_OLE:
+    case Opcode::FCMP_OGT:
+    case Opcode::FCMP_OGE:
+    case Opcode::FCMP_UEQ:
+    case Opcode::FCMP_UNE:
+    case Opcode::FCMP_ULT:
+    case Opcode::FCMP_ULE:
+    case Opcode::FCMP_UGT:
+    case Opcode::FCMP_UGE: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("Floating-point comparison requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto type1 = inst.operands[0]->type;
+        auto type2 = inst.operands[1]->type;
+        if (type1.kind != type2.kind) {
+          errors.push_back("Floating-point comparison operands must have same type");
+        }
+        if (!type1.is_float()) {
+          errors.push_back("Floating-point comparison operands must be float types");
+        }
+      }
+      break;
+    }
+    case Opcode::BR: {
+      if (inst.operands.size() != 0) {
+        errors.push_back("Unconditional branch requires no operands, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::BR_COND: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("Conditional branch requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && inst.operands[0]->type.kind != TypeKind::I1) {
+        errors.push_back("Conditional branch condition must be i1 type");
+      }
+      break;
+    }
+    case Opcode::RET: {
+      // Return can have 0 or 1 operands depending on function return type
+      if (inst.operands.size() > 1) {
+        errors.push_back("RET requires at most 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::CALL: {
+      if (inst.operands.size() < 0) {
+        errors.push_back("CALL requires at least 0 operands, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::TRUNC:
+    case Opcode::ZEXT:
+    case Opcode::SEXT: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("Integer conversion requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_integer()) {
+        errors.push_back("Integer conversion operand must be integer type");
+      }
+      break;
+    }
+    case Opcode::FPTRUNC:
+    case Opcode::FPEXT: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("Float conversion requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_float()) {
+        errors.push_back("Float conversion operand must be float type");
+      }
+      break;
+    }
+    case Opcode::FPTOUI:
+    case Opcode::FPTOSI: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("Float-to-int conversion requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_float()) {
+        errors.push_back("Float-to-int conversion operand must be float type");
+      }
+      break;
+    }
+    case Opcode::UITOFP:
+    case Opcode::SITOFP: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("Int-to-float conversion requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_integer()) {
+        errors.push_back("Int-to-float conversion operand must be integer type");
+      }
+      break;
+    }
+    case Opcode::PTRTOINT:
+    case Opcode::INTTOPTR: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("Pointer conversion requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::BITCAST: {
+      if (inst.operands.size() != 1) {
+        errors.push_back("BITCAST requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::PHI: {
+      if (inst.operands.size() < 2) {
+        errors.push_back("PHI requires at least 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::SELECT: {
+      if (inst.operands.size() != 3) {
+        errors.push_back("SELECT requires exactly 3 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 1 && inst.operands[0]->type.kind != TypeKind::I1) {
+        errors.push_back("SELECT condition must be i1 type");
+      }
+      break;
+    }
+    case Opcode::SWITCH: {
+      if (inst.operands.size() < 1) {
+        errors.push_back("SWITCH requires at least 1 operand, got " + std::to_string(inst.operands.size()));
+      }
+      if (!inst.operands.empty() && !inst.operands[0]->type.is_integer()) {
+        errors.push_back("SWITCH value must be integer type");
+      }
+      break;
+    }
+    case Opcode::VECTOR_EXTRACT: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("VECTOR_EXTRACT requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 1 && inst.operands[0]->type.kind != TypeKind::VECTOR) {
+        errors.push_back("VECTOR_EXTRACT first operand must be vector type");
+      }
+      if (inst.operands.size() >= 2 && !inst.operands[1]->type.is_integer()) {
+        errors.push_back("VECTOR_EXTRACT index must be integer type");
+      }
+      break;
+    }
+    case Opcode::VECTOR_INSERT: {
+      if (inst.operands.size() != 3) {
+        errors.push_back("VECTOR_INSERT requires exactly 3 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 1 && inst.operands[0]->type.kind != TypeKind::VECTOR) {
+        errors.push_back("VECTOR_INSERT first operand must be vector type");
+      }
+      if (inst.operands.size() >= 3 && !inst.operands[2]->type.is_integer()) {
+        errors.push_back("VECTOR_INSERT index must be integer type");
+      }
+      break;
+    }
+    case Opcode::VECTOR_SHUFFLE: {
+      if (inst.operands.size() != 3) {
+        errors.push_back("VECTOR_SHUFFLE requires exactly 3 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 1 && inst.operands[0]->type.kind != TypeKind::VECTOR) {
+        errors.push_back("VECTOR_SHUFFLE first operand must be vector type");
+      }
+      if (inst.operands.size() >= 2 && inst.operands[1]->type.kind != TypeKind::VECTOR) {
+        errors.push_back("VECTOR_SHUFFLE second operand must be vector type");
+      }
+      break;
+    }
+    case Opcode::ATOMIC_CAS: {
+      if (inst.operands.size() != 3) {
+        errors.push_back("ATOMIC_CAS requires exactly 3 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 3) {
+        auto ptr_type = inst.operands[0]->type;
+        auto expected_type = inst.operands[1]->type;
+        auto desired_type = inst.operands[2]->type;
+        if (!is_valid_pointer_type(ptr_type)) {
+          errors.push_back("ATOMIC_CAS pointer operand must be valid pointer type");
+        }
+        if (!is_atomic_compatible_type(expected_type)) {
+          errors.push_back("ATOMIC_CAS expected value type is not atomic-compatible");
+        }
+        if (expected_type.kind != desired_type.kind) {
+          errors.push_back("ATOMIC_CAS expected and desired values must have same type");
+        }
+      }
+      break;
+    }
+    case Opcode::ATOMIC_RMW: {
+      if (inst.operands.size() != 2) {
+        errors.push_back("ATOMIC_RMW requires exactly 2 operands, got " + std::to_string(inst.operands.size()));
+      }
+      if (inst.operands.size() >= 2) {
+        auto ptr_type = inst.operands[0]->type;
+        auto operand_type = inst.operands[1]->type;
+        if (!is_valid_pointer_type(ptr_type)) {
+          errors.push_back("ATOMIC_RMW pointer operand must be valid pointer type");
+        }
+        if (!is_atomic_compatible_type(operand_type)) {
+          errors.push_back("ATOMIC_RMW operand type is not atomic-compatible");
+        }
+      }
+      break;
+    }
+    case Opcode::ATOMIC_FENCE: {
+      if (inst.operands.size() != 0) {
+        errors.push_back("ATOMIC_FENCE requires no operands, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::SYSCALL: {
+      if (inst.operands.size() < 0) {
+        errors.push_back("SYSCALL requires at least 0 operands, got " + std::to_string(inst.operands.size()));
+      }
+      break;
+    }
+    case Opcode::LANDINGPAD:
+    case Opcode::RESUME:
+    case Opcode::UNREACHABLE: {
+      // These are special instructions with complex validation
+      break;
+    }
     case Opcode::LOAD: {
       if (inst.operands.size() != 1) {
         errors.push_back("LOAD requires exactly 1 operand, got " + std::to_string(inst.operands.size()));
@@ -469,14 +842,93 @@ std::string IRDumper::dump_instruction(const Instruction& inst, DumpFormat forma
   
   // Special instruction-specific information
   switch (inst.opcode) {
-    case Opcode::ATOMIC_LOAD:
-    case Opcode::ATOMIC_STORE:
-    case Opcode::ATOMIC_CAS:
-    case Opcode::ATOMIC_RMW:
-    case Opcode::ATOMIC_FENCE:
-      // Add memory ordering information for atomic operations
-      result += " ; atomic";
+    case Opcode::ATOMIC_LOAD: {
+      auto atomic_load = static_cast<const AtomicLoadInst*>(&inst);
+      result += " " + memory_ordering_to_string(atomic_load->memory_ordering);
+      result += ", align " + std::to_string(atomic_load->alignment);
       break;
+    }
+    case Opcode::ATOMIC_STORE: {
+      auto atomic_store = static_cast<const AtomicStoreInst*>(&inst);
+      result += " " + memory_ordering_to_string(atomic_store->memory_ordering);
+      result += ", align " + std::to_string(atomic_store->alignment);
+      break;
+    }
+    case Opcode::ATOMIC_CAS: {
+      auto atomic_cas = static_cast<const AtomicCASInst*>(&inst);
+      result += " " + memory_ordering_to_string(atomic_cas->success_ordering);
+      result += " " + memory_ordering_to_string(atomic_cas->failure_ordering);
+      result += ", align " + std::to_string(atomic_cas->alignment);
+      break;
+    }
+    case Opcode::ATOMIC_RMW: {
+      auto atomic_rmw = static_cast<const AtomicRMWInst*>(&inst);
+      result += " " + atomic_rmw_op_to_string(atomic_rmw->rmw_operation);
+      result += " " + memory_ordering_to_string(atomic_rmw->memory_ordering);
+      result += ", align " + std::to_string(atomic_rmw->alignment);
+      break;
+    }
+    case Opcode::ATOMIC_FENCE: {
+      auto atomic_fence = static_cast<const AtomicFenceInst*>(&inst);
+      result += " " + memory_ordering_to_string(atomic_fence->memory_ordering);
+      break;
+    }
+    case Opcode::SYSCALL: {
+      auto syscall = static_cast<const SyscallInst*>(&inst);
+      result += " #" + std::to_string(syscall->syscall_number);
+      break;
+    }
+    case Opcode::CALL: {
+      auto call = static_cast<const CallInst*>(&inst);
+      result += " @" + call->function_name;
+      break;
+    }
+    case Opcode::EXTRACTVALUE: {
+      auto extract = static_cast<const ExtractValueInst*>(&inst);
+      result += " [" + std::to_string(extract->field_indices[0]);
+      for (size_t i = 1; i < extract->field_indices.size(); ++i) {
+        result += ", " + std::to_string(extract->field_indices[i]);
+      }
+      result += "]";
+      break;
+    }
+    case Opcode::INSERTVALUE: {
+      auto insert = static_cast<const InsertValueInst*>(&inst);
+      result += " [" + std::to_string(insert->field_indices[0]);
+      for (size_t i = 1; i < insert->field_indices.size(); ++i) {
+        result += ", " + std::to_string(insert->field_indices[i]);
+      }
+      result += "]";
+      break;
+    }
+    case Opcode::PHI: {
+      auto phi = static_cast<const PhiInst*>(&inst);
+      result += " [";
+      for (size_t i = 0; i < phi->operands.size(); ++i) {
+        if (i > 0) result += ", ";
+        result += dump_value(*phi->operands[i], format);
+        result += ", " + phi->incoming_blocks[i]->name;
+      }
+      result += "]";
+      break;
+    }
+    case Opcode::SELECT: {
+      auto select = static_cast<const SelectInst*>(&inst);
+      result += " " + dump_value(*select->operands[0], format);
+      result += ", " + dump_value(*select->operands[1], format);
+      result += ", " + dump_value(*select->operands[2], format);
+      break;
+    }
+    case Opcode::SWITCH: {
+      auto switch_inst = static_cast<const SwitchInst*>(&inst);
+      result += " " + dump_value(*switch_inst->operands[0], format);
+      result += ", " + switch_inst->extra_block->name;
+      for (size_t i = 1; i < switch_inst->operands.size(); ++i) {
+        result += " [" + dump_value(*switch_inst->operands[i], format);
+        result += ", " + switch_inst->case_destinations[i-1]->name + "]";
+      }
+      break;
+    }
     default:
       break;
   }
@@ -600,18 +1052,50 @@ std::string IRDumper::opcode_to_string(Opcode op) {
     case Opcode::ICMP_SLE: return "icmp sle";
     case Opcode::ICMP_SGT: return "icmp sgt";
     case Opcode::ICMP_SGE: return "icmp sge";
+    case Opcode::FCMP_OEQ: return "fcmp oeq";
+    case Opcode::FCMP_ONE: return "fcmp one";
+    case Opcode::FCMP_OLT: return "fcmp olt";
+    case Opcode::FCMP_OLE: return "fcmp ole";
+    case Opcode::FCMP_OGT: return "fcmp ogt";
+    case Opcode::FCMP_OGE: return "fcmp oge";
+    case Opcode::FCMP_UEQ: return "fcmp ueq";
+    case Opcode::FCMP_UNE: return "fcmp une";
+    case Opcode::FCMP_ULT: return "fcmp ult";
+    case Opcode::FCMP_ULE: return "fcmp ule";
+    case Opcode::FCMP_UGT: return "fcmp ugt";
+    case Opcode::FCMP_UGE: return "fcmp uge";
     case Opcode::BR: return "br";
     case Opcode::BR_COND: return "br";
     case Opcode::RET: return "ret";
     case Opcode::CALL: return "call";
+    case Opcode::INVOKE: return "invoke";
+    case Opcode::TRUNC: return "trunc";
+    case Opcode::ZEXT: return "zext";
+    case Opcode::SEXT: return "sext";
+    case Opcode::FPTRUNC: return "fptrunc";
+    case Opcode::FPEXT: return "fpext";
+    case Opcode::FPTOUI: return "fptoui";
+    case Opcode::FPTOSI: return "fptosi";
+    case Opcode::UITOFP: return "uitofp";
+    case Opcode::SITOFP: return "sitofp";
+    case Opcode::PTRTOINT: return "ptrtoint";
+    case Opcode::INTTOPTR: return "inttoptr";
+    case Opcode::BITCAST: return "bitcast";
     case Opcode::PHI: return "phi";
     case Opcode::SELECT: return "select";
+    case Opcode::SWITCH: return "switch";
+    case Opcode::VECTOR_EXTRACT: return "extractelement";
+    case Opcode::VECTOR_INSERT: return "insertelement";
+    case Opcode::VECTOR_SHUFFLE: return "shufflevector";
     case Opcode::ATOMIC_LOAD: return "atomic_load";
     case Opcode::ATOMIC_STORE: return "atomic_store";
     case Opcode::ATOMIC_CAS: return "atomic_cas";
     case Opcode::ATOMIC_RMW: return "atomic_rmw";
     case Opcode::ATOMIC_FENCE: return "atomic_fence";
     case Opcode::SYSCALL: return "syscall";
+    case Opcode::LANDINGPAD: return "landingpad";
+    case Opcode::RESUME: return "resume";
+    case Opcode::UNREACHABLE: return "unreachable";
     default: return "unknown";
   }
 }

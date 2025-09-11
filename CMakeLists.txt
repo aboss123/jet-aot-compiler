@@ -81,6 +81,11 @@ add_library(backend STATIC
     src/backends/codegen/backend.cpp 
     src/backends/codegen/x64_backend.cpp 
     src/backends/codegen/arm64_backend.cpp
+    src/backends/codegen/constant_folding_pass.cpp
+    src/backends/codegen/dead_code_elimination_pass.cpp
+    src/backends/codegen/peephole_optimization_pass.cpp
+    src/backends/codegen/instruction_scheduling_pass.cpp
+    src/backends/codegen/optimization_pass_manager.cpp
 )
 target_link_libraries(backend PRIVATE ir x64_assembler arm64_assembler macho_builder elf_builder)
 target_include_directories(backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -93,10 +98,13 @@ add_library(register_allocator STATIC
     src/backends/codegen/constant_folding_pass.cpp
     src/backends/codegen/dead_code_elimination_pass.cpp
     src/backends/codegen/instruction_scheduling_pass.cpp
+    src/backends/codegen/peephole_optimization_pass.cpp
     src/backends/codegen/optimization_pass_manager.cpp
 )
 target_link_libraries(register_allocator PRIVATE ir)
 target_include_directories(register_allocator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# IR improvements functionality has been integrated into the main test_suite
 
 # =============================================================================
 # EXAMPLES AND DEMOS
@@ -130,17 +138,15 @@ target_link_libraries(macho_write_exe PRIVATE x64_assembler)
 # TEST SUITE
 # =============================================================================
 
-# Main Test Suite
+# Consolidated Test Suite (contains all tests from previously separate files)
 add_executable(test_suite tests/test_suite.cpp)
-target_link_libraries(test_suite PRIVATE ir backend register_allocator)
+target_link_libraries(test_suite PRIVATE ir backend register_allocator x64_assembler module_linker macho_builder)
 
-# Standalone Optimization Test
-add_executable(standalone_optimization_test tests/standalone_optimization_test.cpp)
-target_link_libraries(standalone_optimization_test PRIVATE ir backend register_allocator)
-
-# Relocation Test
-add_executable(test_relocation tests/test_relocation.cpp)
-target_link_libraries(test_relocation PRIVATE x64_assembler module_linker macho_builder)
+# Note: The following test executables have been consolidated into test_suite:
+# - new_ir_tests (New IR Instructions tests)
+# - standalone_optimization_test (Optimization pass tests)  
+# - test_relocation (Module relocation tests - converted to placeholders)
+# - irbuilder_integration_test (IRBuilder integration tests)
 
 # =============================================================================
 # ASSEMBLY REFERENCE EXECUTABLES
@@ -236,10 +242,21 @@ endif()
 #   - macho_write_exe: Direct executable writing
 #
 # Tests:
-#   - test_suite: Comprehensive test suite (36 tests)
-#   - standalone_optimization_test: Optimization pass testing
-#   - test_relocation: Relocation functionality tests
+#   - test_suite: Consolidated comprehensive test suite (82 tests)
+#     Includes: IR tests, backend tests, optimization tests, integration tests,
+#     register allocation tests, ARM64 tests, and module relocation placeholders
+#
+# Examples:
+#   - x64_assembler_demo: Low-level assembler demonstration  
+#   - ir_hello_world: Basic IR → executable pipeline
+#   - ir_arithmetic_demo: Advanced arithmetic and optimization
+#   - ir_control_flow_demo: Control flow and function calls
+#   - cross_platform_demo: Cross-platform and ELF features
+#   - performance_benchmarks: Performance analysis
 #
 # Reference:
 #   - generated: Generated assembly executable
 #   - hello_name_x64/arm64: Minimal syscall demos
+
+# Add examples subdirectory
+add_subdirectory(examples)

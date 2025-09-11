@@ -149,35 +149,65 @@ bool RegisterAllocator::run_graph_coloring_allocation(IR::Function& function) {
     // Build interference graph
     build_interference_graph(function);
     
-    // Simple graph coloring: try to color each node with the lowest available color
+    // Enhanced graph coloring with spill handling
     std::unordered_map<uint32_t, Register> coloring;
+    std::vector<uint32_t> spill_candidates;
     
+    // Sort values by spill cost (number of uses)
+    std::vector<std::pair<uint32_t, int>> value_costs;
     for (const auto& [value_id, liveness] : liveness_info_) {
         if (liveness.is_constant || liveness.is_global) continue;
         
-        // Find interfering values
-        std::set<uint32_t> interfering;
+        int cost = liveness.use_blocks.size() + liveness.def_blocks.size();
+        value_costs.emplace_back(value_id, cost);
+    }
+    
+    std::sort(value_costs.begin(), value_costs.end(), 
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    
+    // Try to color each value
+    for (const auto& [value_id, cost] : value_costs) {
+        // Find interfering values that are already colored
+        std::set<uint32_t> interfering_colors;
         for (const auto& [v1, v2] : interference_edges_) {
-            if (v1 == value_id) interfering.insert(v2);
-            else if (v2 == value_id) interfering.insert(v1);
+            if (v1 == value_id) {
+                auto it = coloring.find(v2);
+                if (it != coloring.end()) {
+                    interfering_colors.insert(it->second.id());
+                }
+            } else if (v2 == value_id) {
+                auto it = coloring.find(v1);
+                if (it != coloring.end()) {
+                    interfering_colors.insert(it->second.id());
+                }
+            }
         }
         
         // Find available register
         RegisterClass reg_class = get_register_class(IR::Type::i32());
-        Register reg = select_best_register(reg_class, interfering);
+        Register reg = select_best_register_with_constraints(reg_class, interfering_colors);
         
         if (reg.id() != -1) {
             coloring[value_id] = reg;
             mark_register_used(reg, value_id);
         } else {
-            // Spill this value
-            spill_value(value_id);
-            total_spills_++;
+            // This value needs to be spilled
+            spill_candidates.push_back(value_id);
         }
+    }
+    
+    // Handle spill candidates
+    for (uint32_t value_id : spill_candidates) {
+        spill_value(value_id);
+        total_spills_++;
     }
     
     // Apply coloring
     value_to_register_ = coloring;
+    
+    std::cout << "  🎨 Graph coloring completed: " << coloring.size() 
+              << " values colored, " << spill_candidates.size() << " spilled\n";
+    
     return true;
 }
 
@@ -233,6 +263,17 @@ void RegisterAllocator::build_interference_graph(IR::Function& function) {
 }
 
 Register RegisterAllocator::select_best_register(RegisterClass reg_class, const std::set<uint32_t>& interfering_values) {
+    // Simple implementation - just return the first available register
+    auto available_regs = get_available_registers(reg_class);
+    for (const auto& reg : available_regs) {
+        if (is_register_available(reg)) {
+            return reg;
+        }
+    }
+    return Register(); // No register available
+}
+
+Register RegisterAllocator::select_best_register_with_constraints(RegisterClass reg_class, const std::set<uint32_t>& interfering_colors) {
     if (!register_set_) {
         return Register(); // Return invalid register
     }
@@ -241,17 +282,8 @@ Register RegisterAllocator::select_best_register(RegisterClass reg_class, const 
     
     for (const auto& reg : available_regs) {
         if (is_register_available(reg)) {
-            // Check if this register conflicts with interfering values
-            bool conflicts = false;
-            for (uint32_t interfering_value : interfering_values) {
-                auto it = value_to_register_.find(interfering_value);
-                if (it != value_to_register_.end() && it->second.id() == reg.id()) {
-                    conflicts = true;
-                    break;
-                }
-            }
-            
-            if (!conflicts) {
+            // Check if this register's color conflicts with interfering colors
+            if (interfering_colors.find(reg.id()) == interfering_colors.end()) {
                 return reg;
             }
         }
@@ -314,8 +346,22 @@ bool RegisterAllocator::is_allocated(std::shared_ptr<IR::Value> value) {
 
 void RegisterAllocator::spill_value(uint32_t value_id) {
     spilled_values_.insert(value_id);
-    spill_offsets_[value_id] = next_spill_offset_;
-    next_spill_offset_ += 8; // Assume 8-byte alignment
+    
+    // Get the type information for proper spill size calculation
+    // For now, use a default size but this should be enhanced to get actual type info
+    int32_t spill_size = 8; // Default to 8 bytes (64-bit)
+    int32_t alignment = 8;   // Default alignment
+    
+    // TODO: Get actual type information from value_id to determine if it's a vector
+    // For vector types, use vector-specific spill size and alignment
+    
+    // Align the spill offset properly
+    int32_t aligned_offset = (next_spill_offset_ + alignment - 1) & ~(alignment - 1);
+    
+    spill_offsets_[value_id] = aligned_offset;
+    next_spill_offset_ = aligned_offset + spill_size;
+    
+    total_spills_++;
 }
 
 bool RegisterAllocator::is_spilled(uint32_t value_id) const {
@@ -382,7 +428,9 @@ uint32_t RegisterAllocator::get_total_register_uses() const {
 }
 
 RegisterClass RegisterAllocator::get_register_class(const IR::Type& type) const {
-    if (type.is_float()) {
+    if (type.is_vector()) {
+        return RegisterClass::VECTOR;
+    } else if (type.is_float()) {
         return RegisterClass::FLOATING_POINT;
     } else if (type.is_integer() || type.is_pointer()) {
         return RegisterClass::GENERAL_PURPOSE;
@@ -418,6 +466,52 @@ bool RegisterAllocator::has_interference(uint32_t value1, uint32_t value2) const
     }
     
     return false;
+}
+
+// Vector-specific allocation methods
+bool RegisterAllocator::requires_vector_alignment(const IR::Type& type) const {
+    // Vector types require aligned memory access
+    return type.is_vector();
+}
+
+uint32_t RegisterAllocator::get_vector_spill_size(const IR::Type& type) const {
+    if (!type.is_vector()) {
+        return type.size_bytes();
+    }
+    
+    // Vector types need aligned spill slots
+    uint32_t size = type.size_bytes();
+    uint32_t alignment = type.alignment();
+    
+    // Round up to alignment boundary
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+std::vector<Register> RegisterAllocator::get_vector_register_aliases(const Register& vector_reg) const {
+    std::vector<Register> aliases;
+    
+    if (!register_set_) {
+        return aliases;
+    }
+    
+    // For x64: YMM registers overlap with XMM registers
+    // For ARM64: Vector registers can be accessed as different sizes (V, D, S, H, B)
+    if (register_set_->get_architecture_name() == "x86_64") {
+        // YMM0 overlaps with XMM0, etc.
+        if (vector_reg.reg_class() == RegisterClass::VECTOR) {
+            int xmm_id = vector_reg.id() - 200 + 100; // Convert YMM id to XMM id
+            std::string xmm_name = "xmm" + std::to_string(vector_reg.id() - 200);
+            aliases.push_back(Register(xmm_id, xmm_name, RegisterClass::FLOATING_POINT));
+        }
+    } else if (register_set_->get_architecture_name() == "ARM64") {
+        // ARM64 V registers can be accessed as different sizes
+        if (vector_reg.reg_class() == RegisterClass::VECTOR || vector_reg.reg_class() == RegisterClass::FLOATING_POINT) {
+            // V registers are the same as floating point registers in ARM64
+            aliases.push_back(vector_reg);
+        }
+    }
+    
+    return aliases;
 }
 
 // ==================== LivenessAnalyzer Implementation ====================

@@ -46,6 +46,19 @@ private:
         std::shared_ptr<IR::Value> rhs
     );
     
+    // Try to fold a comparison operation with constant operands
+    std::shared_ptr<IR::Value> try_fold_comparison(
+        IR::Opcode opcode,
+        std::shared_ptr<IR::Value> lhs,
+        std::shared_ptr<IR::Value> rhs
+    );
+    
+    // Try to fold a type conversion operation with constant operand
+    std::shared_ptr<IR::Value> try_fold_conversion(
+        IR::Opcode opcode,
+        std::shared_ptr<IR::Value> operand
+    );
+    
     // Check if a value is a constant
     bool is_constant(const std::shared_ptr<IR::Value>& value) const;
     
@@ -88,6 +101,23 @@ private:
     
     // Get instruction latency (simplified model)
     int get_instruction_latency(const std::unique_ptr<IR::Instruction>& inst) const;
+};
+
+// Peephole optimization pass
+class PeepholeOptimizationPass : public OptimizationPass {
+public:
+    bool run(IR::Module& module) override;
+    std::string get_name() const override { return "PeepholeOptimization"; }
+    
+private:
+    // Apply peephole optimizations to a basic block
+    bool optimize_basic_block(IR::BasicBlock* block);
+    
+    // Check if a value is a constant
+    bool is_constant(const std::shared_ptr<IR::Value>& value) const;
+    
+    // Get constant value from a constant value
+    int64_t get_constant_value(const std::shared_ptr<IR::Value>& value) const;
 };
 
 // Optimization pass manager

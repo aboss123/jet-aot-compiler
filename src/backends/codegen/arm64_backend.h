@@ -50,6 +50,9 @@ private:
   void emit_syscall_write(const std::string& message);
   void emit_syscall(const IR::SyscallInst& inst);
   
+  // Data section support
+  void add_string_to_data_section(const std::string& str);
+  
   // Atomic operation helpers
   void emit_atomic_load(const IR::AtomicLoadInst& inst);
   void emit_atomic_store(const IR::AtomicStoreInst& inst);

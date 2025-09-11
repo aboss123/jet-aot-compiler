@@ -144,6 +144,11 @@ public:
     
     // Public helper methods
     RegisterClass get_register_class(const IR::Type& type) const;
+    
+    // Vector-specific allocation methods
+    bool requires_vector_alignment(const IR::Type& type) const;
+    uint32_t get_vector_spill_size(const IR::Type& type) const;
+    std::vector<Register> get_vector_register_aliases(const Register& vector_reg) const;
 
 private:
     // Core allocation logic
@@ -158,6 +163,10 @@ private:
     
     // Register selection
     Register select_best_register(RegisterClass reg_class, const std::set<uint32_t>& interfering_values);
+    
+    // Select register with color constraints (for graph coloring)
+    Register select_best_register_with_constraints(RegisterClass reg_class, const std::set<uint32_t>& interfering_colors);
+    
     bool is_register_available(const Register& reg) const;
     void mark_register_used(const Register& reg, uint32_t value_id);
     void mark_register_free(const Register& reg);

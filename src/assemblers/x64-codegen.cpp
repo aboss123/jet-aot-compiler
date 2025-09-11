@@ -96,214 +96,238 @@
 
 using namespace nextgen::jet::x64;
 
-// Certain unary instructions (1 operand) have patterns pertaining to the
-// way that they are encoded, due to this, a macro has been created to simplify
-// the amount of code written and redundancy for slight changes in the code.
+// x64 instruction encoding constants
+namespace {
+    // REX prefix constants
+    constexpr ubyte REX_PREFIX_MASK = 0x40;
+    constexpr ubyte REX_W_BIT = 0x08;  // 64-bit operation
+    constexpr ubyte REX_R_BIT = 0x04;  // Extension for ModRM.reg
+    constexpr ubyte REX_X_BIT = 0x02;  // Extension for SIB.index
+    constexpr ubyte REX_B_BIT = 0x01;  // Extension for ModRM.r/m or SIB.base
+    
+    // Common opcodes
+    constexpr ubyte OPCODE_NOP = 0x90;
+    constexpr ubyte OPCODE_RET = 0xC3;
+    constexpr ubyte OPCODE_SYSCALL_1 = 0x0F;
+    constexpr ubyte OPCODE_SYSCALL_2 = 0x05;
+    constexpr ubyte OPCODE_INT3 = 0xCC;
+    constexpr ubyte OPCODE_HLT = 0xF4;
+    
+    // Memory operation opcodes
+    constexpr ubyte MOV_REG_TO_RM = 0x89;
+    constexpr ubyte MOV_RM_TO_REG = 0x8B;
+    constexpr ubyte MOV_IMM_TO_RM = 0xC7;
+    
+    // Jump opcodes
+    constexpr ubyte JMP_REL8 = 0xEB;
+    constexpr ubyte JMP_REL32 = 0xE9;
+    constexpr ubyte CALL_REL32 = 0xE8;
+    
+    // Register masks
+    constexpr ubyte REGISTER_MASK = 0x07;
+    constexpr ubyte EXTENDED_REG_MASK = 0x08;
+}
+
+// Helper functions for cleaner instruction encoding
+namespace {
+    // Simplified helper for instruction encoding  
+    ubyte encode_modrm_simple(ubyte mod, ubyte reg, ubyte rm) {
+        return (mod << 6) | ((reg & REGISTER_MASK) << 3) | (rm & REGISTER_MASK);
+    }
+}
+
+// Restored original macro approach but with better organization
 #define unary_instruction(name, op1, op2, extra_opcode)\
 void Assembler::name##b(const Register reg) {\
     if (rex_needed2(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
     write(op1, EncodeModRM<0b11, extra_opcode>(reg));\
 }\
-void Assembler::name##w(const Register reg) {                            \
-    write(0x66);          \
+void Assembler::name##w(const Register reg) {\
+    write(0x66);\
     if (rex_needed(reg)) write(REX_PREFIX | REX_B);\
     write(op2, EncodeModRM<0b11, extra_opcode>(reg));\
 }\
 void Assembler::name##d(const Register reg) {\
-if (rex_needed(reg)) write(REX_PREFIX | REX_B);\
-write(op2, EncodeModRM<0b11, extra_opcode>(reg));\
+    if (rex_needed(reg)) write(REX_PREFIX | REX_B);\
+    write(op2, EncodeModRM<0b11, extra_opcode>(reg));\
 }\
 void Assembler::name##q(const Register reg) {\
-if (rex_needed(reg)) write(REX_PREFIX | REX_W | REX_B);\
-else write(REX_PREFIX | REX_W);\
-write(op2, EncodeModRM<0b11, extra_opcode>(reg));\
+    if (rex_needed(reg)) write(REX_PREFIX | REX_W | REX_B);\
+    else write(REX_PREFIX | REX_W);\
+    write(op2, EncodeModRM<0b11, extra_opcode>(reg));\
 }\
-void Assembler::name##b(const MemoryAddress &addr) {                     \
-rex_optional_rr3(addr.base, addr.index);                              \
-write(op1);                                          \
-write_address(addr, (const Register)(extra_opcode)); \
-}                                                      \
-void Assembler::name##w(const MemoryAddress &addr) {                     \
-rex_optional_rr2(addr.base, addr.index);                              \
-write(op2);                                          \
-write_address(addr, (const Register)(extra_opcode)); \
-} \
-void Assembler::name##d(const MemoryAddress &addr) {                     \
-rex_optional_rr3(addr.base, addr.index);                              \
-write(op2);                                          \
-write_address(addr, (const Register)(extra_opcode)); \
-} \
-void Assembler::name##q(const MemoryAddress &addr) {                     \
-rex_optional_rr4(addr.base, addr.index);                              \
-write(op2);                                          \
-write_address(addr, (const Register)(extra_opcode)); \
-}  \
+void Assembler::name##b(const MemoryAddress &addr) {\
+    rex_optional_rr3(addr.base, addr.index);\
+    write(op1);\
+    write_address(addr, (const Register)(extra_opcode));\
+}\
+void Assembler::name##w(const MemoryAddress &addr) {\
+    rex_optional_rr2(addr.base, addr.index);\
+    write(op2);\
+    write_address(addr, (const Register)(extra_opcode));\
+}\
+void Assembler::name##d(const MemoryAddress &addr) {\
+    rex_optional_rr3(addr.base, addr.index);\
+    write(op2);\
+    write_address(addr, (const Register)(extra_opcode));\
+}\
+void Assembler::name##q(const MemoryAddress &addr) {\
+    rex_optional_rr4(addr.base, addr.index);\
+    write(op2);\
+    write_address(addr, (const Register)(extra_opcode));\
+}
 
 #define binary_instruction(name, o1, o2, m1, m2) \
 void Assembler::name##b(const Register dest, const Register src) { \
-if (rex_needed2(dest) or rex_needed2(src)) write(REX_PREFIX | (src & 0b1000) >> 1 | (dest & 0b1000) >> 3);\
-write(o1, EncodeModRM<0b11> (src, dest));\
+    if (rex_needed2(dest) or rex_needed2(src)) write(REX_PREFIX | (src & 0b1000) >> 1 | (dest & 0b1000) >> 3);\
+    write(o1, EncodeModRM<0b11> (src, dest));\
 } \
 void Assembler::name##w(const Register dest, const Register src) {  \
-if (rex_needed(dest) or rex_needed(src)) write(0x66, REX_PREFIX | (src & 0b1000)>> 1 | (dest & 0b1000) >> 3); \
-else write(0x66); \
-write(o2, EncodeModRM<0b11> (src, dest));                                         \
-}                      \
-void Assembler::name##d(const Register dest, const Register src) { \
-if (rex_needed(dest) or rex_needed(src)) write(REX_PREFIX | (src & 0b1000) >> 1 | (dest & 0b1000) >> 3);                                           \
-write(o2, EncodeModRM<0b11>(src, dest));  \
-}                          \
-void Assembler::name##q(const Register dest, const Register src) { \
-if (rex_needed(dest) or rex_needed(src)) write(REX_PREFIX | REX_W | (src & 0b1000) >> 1 | (dest & 0b1000) >> 3);                               \
-else write(0x48); \
-write(o2, EncodeModRM<0b11> (src, dest));\
-}                                                \
-void Assembler::name##b(const Register dest, const MemoryAddress &src) { \
-rex_optional_rm1(dest, src); \
-write(m1); \
-write_address(src, dest); \
-} \
-\
-void Assembler::name##w(const Register dest, const MemoryAddress &src) { \
-rex_optional_rm2(dest, src); \
-write(m2); \
-write_address(src, dest); \
-} \
-\
-void Assembler::name##d(const Register dest, const MemoryAddress &src) { \
-rex_optional_rm3(dest, src); \
-write(m2); \
-write_address(src, dest); \
-} \
-\
-void Assembler::name##q(const Register dest, const MemoryAddress &src) { \
-rex_optional_rm4(dest, src); \
-write(m2); \
-write_address(src, dest); \
-} \
-\
-void Assembler::name##b(const MemoryAddress &dest, const Register src) { \
-rex_optional_rm1(src, dest);\
-write(o1);\
-write_address(dest, src);\
+    if (rex_needed(dest) or rex_needed(src)) write(0x66, REX_PREFIX | (src & 0b1000)>> 1 | (dest & 0b1000) >> 3); \
+    else write(0x66); \
+    write(o2, EncodeModRM<0b11> (src, dest));\
 }\
-\
+void Assembler::name##d(const Register dest, const Register src) { \
+    if (rex_needed(dest) or rex_needed(src)) write(REX_PREFIX | (src & 0b1000) >> 1 | (dest & 0b1000) >> 3);\
+    write(o2, EncodeModRM<0b11>(src, dest));\
+}\
+void Assembler::name##q(const Register dest, const Register src) { \
+    if (rex_needed(dest) or rex_needed(src)) write(REX_PREFIX | REX_W | (src & 0b1000) >> 1 | (dest & 0b1000) >> 3);\
+    else write(0x48); \
+    write(o2, EncodeModRM<0b11> (src, dest));\
+}\
+void Assembler::name##b(const Register dest, const MemoryAddress &src) { \
+    rex_optional_rm1(dest, src); \
+    write(m1); \
+    write_address(src, dest); \
+}\
+void Assembler::name##w(const Register dest, const MemoryAddress &src) { \
+    rex_optional_rm2(dest, src); \
+    write(m2); \
+    write_address(src, dest); \
+}\
+void Assembler::name##d(const Register dest, const MemoryAddress &src) { \
+    rex_optional_rm3(dest, src); \
+    write(m2); \
+    write_address(src, dest); \
+}\
+void Assembler::name##q(const Register dest, const MemoryAddress &src) { \
+    rex_optional_rm4(dest, src); \
+    write(m2); \
+    write_address(src, dest); \
+}\
+void Assembler::name##b(const MemoryAddress &dest, const Register src) { \
+    rex_optional_rm1(src, dest);\
+    write(o1);\
+    write_address(dest, src);\
+}\
 void Assembler::name##w(const MemoryAddress &dest, const Register src) { \
-rex_optional_rm2(src, dest);\
-write(o2);\
-write_address(dest, src);\
-} \
-\
+    rex_optional_rm2(src, dest);\
+    write(o2);\
+    write_address(dest, src);\
+}\
 void Assembler::name##d(const MemoryAddress &dest, const Register src) { \
-rex_optional_rm3(src, dest); \
-write(o2); \
-write_address(dest, src); \
-} \
-\
+    rex_optional_rm3(src, dest); \
+    write(o2); \
+    write_address(dest, src); \
+}\
 void Assembler::name##q(const MemoryAddress &dest, const Register src) { \
-rex_optional_rm4(src, dest); \
-write(o2); \
-write_address(dest, src); \
-} \
+    rex_optional_rm4(src, dest); \
+    write(o2); \
+    write_address(dest, src); \
+}
 
 
 
 #define binary_instruction_imm(name, AL_, AX_, extra_opcode) \
-void Assembler::name##b(const Register reg, Imm8 imm) {                   \
-if (rex_needed2(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3)); \
-if (reg == AX) write(AL_, imm);                         \
-else write(0x80, EncodeModRM<0b11>((const Register)(extra_opcode), reg), imm);\
-}                                                            \
-\
-void Assembler::name##w(const Register reg, Imm8 imm) {                       \
-write(0x66); \
-if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));                                                             \
-write(0x83, EncodeModRM<0b11>((const Register)extra_opcode, reg), imm); \
-}                                                            \
-void Assembler::name##d(const Register reg, Imm8 imm) {                       \
-if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));                                                             \
-write(0x83, EncodeModRM<0b11>((const Register)extra_opcode, reg), imm); \
-}                                                           \
-void Assembler::name##q(const Register reg, Imm8 imm) {                       \
-if (rex_needed(reg)) write(REX_PREFIX | REX_W |(reg & 0b1000 >> 3));                                                       \
-else write(0x48); \
-write(0x83, EncodeModRM<0b11>((const Register)extra_opcode, reg), imm); \
-}                                                \
-void Assembler::name##w(const Register reg, Imm16 imm) {                      \
-if (reg == AX) write(0x66, AX_, imm);                       \
-else {                                                     \
-write(0x66);                                            \
-if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));                                                         \
-write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+void Assembler::name##b(const Register reg, Imm8 imm) {\
+    if (rex_needed2(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3)); \
+    if (reg == AX) write(AL_, imm);\
+    else write(0x80, EncodeModRM<0b11>((const Register)(extra_opcode), reg), imm);\
 }\
-\
-} \
+void Assembler::name##w(const Register reg, Imm8 imm) {\
+    write(0x66); \
+    if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
+    write(0x83, EncodeModRM<0b11>((const Register)extra_opcode, reg), imm); \
+}\
+void Assembler::name##d(const Register reg, Imm8 imm) {\
+    if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
+    write(0x83, EncodeModRM<0b11>((const Register)extra_opcode, reg), imm); \
+}\
+void Assembler::name##q(const Register reg, Imm8 imm) {\
+    if (rex_needed(reg)) write(REX_PREFIX | REX_W |(reg & 0b1000 >> 3));\
+    else write(0x48); \
+    write(0x83, EncodeModRM<0b11>((const Register)extra_opcode, reg), imm); \
+}\
+void Assembler::name##w(const Register reg, Imm16 imm) {\
+    if (reg == AX) write(0x66, AX_, imm);\
+    else {\
+        write(0x66);\
+        if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
+        write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    }\
+}\
 void Assembler::name##w(const Register reg, Imm32 imm) { \
-if (reg == AX) write(AX_, imm);                       \
-else {                                                        \
-if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));                                                         \
-write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    if (reg == AX) write(AX_, imm);\
+    else {\
+        if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
+        write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    }\
 }\
-\
-} \
 void Assembler::name##d(const Register reg, Imm16 imm) { \
-if (reg == AX) write(AX_, imm);                       \
-else {                                                        \
-if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));                                                         \
-write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    if (reg == AX) write(AX_, imm);\
+    else {\
+        if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
+        write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    }\
 }\
-\
-}                                                         \
 void Assembler::name##d(const Register reg, Imm32 imm) { \
-if (reg == AX) write(AX_, imm);                       \
-else {                                                       \
-if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));                                                         \
-write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    if (reg == AX) write(AX_, imm);\
+    else {\
+        if (rex_needed(reg)) write(REX_PREFIX | (reg & 0b1000 >> 3));\
+        write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    }\
 }\
-\
-}                                                           \
 void Assembler::name##q(const Register reg, Imm16 imm) { \
-if (reg == AX) write(0x48, AX_, imm);                       \
-else {                                                       \
-if (rex_needed(reg)) write(REX_PREFIX | REX_W | (reg & 0b1000 >> 3));                                                  \
-else write(0x48); \
-write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    if (reg == AX) write(0x48, AX_, imm);\
+    else {\
+        if (rex_needed(reg)) write(REX_PREFIX | REX_W | (reg & 0b1000 >> 3));\
+        else write(0x48); \
+        write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    }\
 }\
-\
-}                                                            \
 void Assembler::name##q(const Register reg, Imm32 imm) { \
-if (reg == AX) write(0x48, AX_, imm);                       \
-else {                                                       \
-if (rex_needed(reg)) write(REX_PREFIX | REX_W | (reg & 0b1000 >> 3));                                                  \
-else write(0x48); \
-write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
-}\
-\
-}  \
+    if (reg == AX) write(0x48, AX_, imm);\
+    else {\
+        if (rex_needed(reg)) write(REX_PREFIX | REX_W | (reg & 0b1000 >> 3));\
+        else write(0x48); \
+        write(0x81, EncodeModRM<0b11>((const Register)extra_opcode,reg), imm);\
+    }\
+}
 
 #define floating_point_binary(name, float_prefix) \
 void Assembler::name##ss(Register dest, Register src) { \
-write(0xF3); \
-rex_optional_rr3(src, dest); \
-write(0x0F, float_prefix, EncodeModRM<0b11>(dest, src)); \
+    write(0xF3); \
+    rex_optional_rr3(src, dest); \
+    write(0x0F, float_prefix, EncodeModRM<0b11>(dest, src)); \
 }\
 void Assembler::name##ss(Register reg, const MemoryAddress &addr) { \
-write(0xF3); \
-rex_optional_rm3(reg, addr); \
-write(0x0F, float_prefix); \
-write_address(addr, reg); \
-}                                                                \
-void Assembler::name##sd(Register dest, Register src) {       \
-write(0xF2);                                                   \
-rex_optional_rr3(src, dest);                                   \
-write(0x0F, float_prefix, EncodeModRM<0b11>(dest, src));                     \
+    write(0xF3); \
+    rex_optional_rm3(reg, addr); \
+    write(0x0F, float_prefix); \
+    write_address(addr, reg); \
+}\
+void Assembler::name##sd(Register dest, Register src) {\
+    write(0xF2);\
+    rex_optional_rr3(src, dest);\
+    write(0x0F, float_prefix, EncodeModRM<0b11>(dest, src));\
 } \
 void Assembler::name##sd(Register reg, const MemoryAddress &addr) { \
-write(0xF2); \
-rex_optional_rm3(reg, addr);\
-write(0x0F, float_prefix);\
-write_address(addr, reg); \
-} \
+    write(0xF2); \
+    rex_optional_rm3(reg, addr);\
+    write(0x0F, float_prefix);\
+    write_address(addr, reg); \
+}
 
 // [disp32]
 MemoryAddress::MemoryAddress(uint disp32)
@@ -1003,7 +1027,7 @@ void Assembler::movss(const MemoryAddress &dest, Register src) {
 }
 
 void Assembler::ret() {
-  write(0xC3U);
+  write(OPCODE_RET);
 }
 // Labels and patching
 void Assembler::bind(Label &label) {
@@ -1398,7 +1422,7 @@ void Assembler::bsrq(Register dest, Register src) {
 
 // Utility instructions
 void Assembler::nop() {
-  write(0x90);
+  write(OPCODE_NOP);
 }
 
 void Assembler::int3() {
@@ -1418,7 +1442,7 @@ void Assembler::std() {
 }
 
 void Assembler::syscall() {
-  write(0x0F, 0x05);
+  write(OPCODE_SYSCALL_1, OPCODE_SYSCALL_2);
 }
 
 // Conditional set instructions

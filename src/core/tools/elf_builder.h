@@ -18,6 +18,15 @@ public:
   // entry_offset: file offset of entry point within buffer (usually 0).
   bool write_executable(const char* path, const uint8_t* buffer, uint32_t size, uint32_t entry_offset = 0, ELFArch arch = ELFArch::X86_64);
 
+  // Writes a dynamically linked ELF executable with interpreter and dynamic linking support
+  bool write_dynamic_executable(const char* path,
+                                const uint8_t* buffer,
+                                uint32_t size,
+                                const std::vector<std::string>& libraries = {},
+                                const char* interpreter = nullptr,
+                                uint32_t entry_offset = 0,
+                                ELFArch arch = ELFArch::X86_64);
+
   // Writes an ELF object file (.o) with a single .text section and one global symbol.
   // The symbol (e.g., "_start") is placed at symbol_offset within the section (usually 0).
   bool write_object(const char* path,
@@ -79,4 +88,19 @@ public:
                                     const std::vector<Relocation>& relocations,
                                     const std::vector<std::pair<std::string, uint32_t>>& symbols, // name, offset
                                     ELFArch arch = ELFArch::X86_64);
+
+private:
+  // GNU hash table implementation for faster symbol lookup
+  struct GnuHashTable {
+    uint32_t nbuckets;
+    uint32_t symoffset; 
+    uint32_t bloom_size;
+    uint32_t bloom_shift;
+    std::vector<uint64_t> bloom_filter;
+    std::vector<uint32_t> buckets;
+    std::vector<uint32_t> chain;
+    
+    void build(const std::vector<std::string>& symbols);
+    static uint32_t gnu_hash(const char* name);
+  };
 };

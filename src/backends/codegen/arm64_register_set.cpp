@@ -86,8 +86,10 @@ void ARM64RegisterSet::initialize_register_sets() {
         Register(131, "v31", RegisterClass::FLOATING_POINT)   // Caller-saved
     };
     
-    // Vector registers (same as floating point in ARM64)
-    vector_regs_ = floating_point_regs_;
+    // Vector registers (same physical registers as floating point in ARM64, but with VECTOR class)
+    for (const auto& fp_reg : floating_point_regs_) {
+        vector_regs_.push_back(Register(fp_reg.id(), fp_reg.name(), RegisterClass::VECTOR));
+    }
     
     // Special registers
     special_regs_ = {
