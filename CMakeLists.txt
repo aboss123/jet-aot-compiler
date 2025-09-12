@@ -76,6 +76,20 @@ add_library(module_linker STATIC
 target_link_libraries(module_linker PRIVATE macho_builder)
 target_include_directories(module_linker PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# Standalone Linker Library
+add_library(standalone_linker STATIC 
+    src/core/tools/standalone_linker.cpp
+    src/core/tools/relocation_engine.cpp
+    src/core/tools/elf_object_parser.cpp
+    src/core/tools/section_merger.cpp
+    src/core/tools/dynamic_linker.cpp
+    src/core/tools/shared_library.cpp
+    src/core/tools/lto_optimizer.cpp
+    src/core/tools/parallel_compiler.cpp
+)
+target_link_libraries(standalone_linker PRIVATE elf_builder macho_builder)
+target_include_directories(standalone_linker PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 # Backend Libraries
 add_library(backend STATIC 
     src/backends/codegen/backend.cpp 
@@ -140,7 +154,7 @@ target_link_libraries(macho_write_exe PRIVATE x64_assembler)
 
 # Consolidated Test Suite (contains all tests from previously separate files)
 add_executable(test_suite tests/test_suite.cpp)
-target_link_libraries(test_suite PRIVATE ir backend register_allocator x64_assembler module_linker macho_builder)
+target_link_libraries(test_suite PRIVATE ir backend register_allocator x64_assembler module_linker macho_builder standalone_linker)
 
 # Note: The following test executables have been consolidated into test_suite:
 # - new_ir_tests (New IR Instructions tests)
