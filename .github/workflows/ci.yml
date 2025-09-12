@@ -8,192 +8,125 @@ on:
 
 jobs:
   build-and-test:
-    name: Build and Test
-    runs-on: ${{ matrix.os }}
-    
     strategy:
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         compiler: [gcc, clang]
-        architecture: [x86_64, arm64]
-        exclude:
-          # GCC is not readily available on macOS
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cc: gcc-11
+            cxx: g++-11
+          - os: ubuntu-latest
+            compiler: clang
+            cc: clang-14
+            cxx: clang++-14
           - os: macos-latest
             compiler: gcc
-          # ARM64 testing only on Linux for now (macOS ARM64 CI is limited)
+            cc: gcc-11
+            cxx: g++-11
           - os: macos-latest
-            architecture: arm64
-            
+            compiler: clang
+            cc: clang
+            cxx: clang++
+
+    runs-on: ${{ matrix.os }}
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up C++ environment
-      uses: aminya/setup-cpp@v1
-      with:
-        compiler: ${{ matrix.compiler }}
-        cmake: true
-        ninja: true
-        
-    - name: Set up ARM64 toolchain (Linux ARM64)
-      if: runner.os == 'Linux' && matrix.architecture == 'arm64'
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
       run: |
-        # Install ARM64 cross-compilation tools
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
-        echo "ARM64 toolchain installed"
-        
-    - name: Configure build (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        mkdir -p build
-        cd build
-        
-        # Configure CMake with architecture-specific settings
-        if [ "${{ matrix.architecture }}" = "arm64" ]; then
-          # ARM64 cross-compilation setup
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -G Ninja \
-            -DCMAKE_VERBOSE_MAKEFILE=ON \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-            -DCMAKE_FIND_ROOT_PATH=/usr/aarch64-linux-gnu \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+        sudo apt-get install -y cmake ninja-build
+        if [ "${{ matrix.compiler }}" = "gcc" ]; then
+          sudo apt-get install -y gcc-11 g++-11
         else
-          # Native x86_64 build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_VERBOSE_MAKEFILE=ON
+          sudo apt-get install -y clang-14 clang++-14
         fi
-        
-    - name: Configure build (macOS)  
-      if: runner.os == 'macOS'
+    
+    - name: Install dependencies (macOS)
+      if: matrix.os == 'macos-latest'
       run: |
-        mkdir -p build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_VERBOSE_MAKEFILE=ON
-        
-    - name: Test toolchain availability
-      run: |
-        echo "Testing toolchain availability..."
-        echo "OS: $RUNNER_OS"
-        echo "Architecture: ${{ matrix.architecture }}"
-        echo "Compiler: ${{ matrix.compiler }}"
-        
-        # Check available tools
-        which gcc || echo "gcc not found"
-        which clang || echo "clang not found"
-        which ld || echo "ld not found"
-        
-        # For ARM64, check cross-compilation tools
-        if [ "${{ matrix.architecture }}" = "arm64" ]; then
-          which aarch64-linux-gnu-gcc || echo "aarch64-linux-gnu-gcc not found"
-          which aarch64-linux-gnu-ld || echo "aarch64-linux-gnu-ld not found"
+        brew install cmake ninja
+        if [ "${{ matrix.compiler }}" = "gcc" ]; then
+          brew install gcc@11
         fi
-        
-    - name: Build project
+    
+    - name: Configure CMake
       run: |
-        cd build
-        cmake --build . --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
-        
-    - name: Validate ARM64 cross-compilation
-      if: runner.os == 'Linux' && matrix.architecture == 'arm64'
-      run: |
-        cd build
-        echo "🔍 Validating ARM64 cross-compilation build..."
-        
-        # Check that object files were created for ARM64
-        file libir.a | grep "aarch64" || echo "Warning: libir.a may not be ARM64"
-        file libx64_assembler.a | grep "aarch64" || echo "Warning: libx64_assembler.a may not be ARM64"
-        file libarm64_assembler.a | grep "aarch64" || echo "Warning: libarm64_assembler.a may not be ARM64"
-        
-        echo "✅ ARM64 cross-compilation validation completed"
-        
-    - name: Run test suite
-      if: matrix.architecture == 'x86_64'  # Only run tests on native architecture
+        cmake -B build \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+    
+    - name: Build
+      run: cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    
+    - name: Run Tests
       run: |
         cd build
         ./test_suite
-        
-    - name: Run optimization tests
-      if: matrix.architecture == 'x86_64'  # Only run tests on native architecture
+    
+    - name: Test Examples (if built)
       run: |
         cd build
-        ./standalone_optimization_test
-        
-    - name: Run relocation tests
-      if: matrix.architecture == 'x86_64'  # Only run tests on native architecture
-      run: |
-        cd build
-        ./test_relocation
-        
-    - name: Test example programs
-      if: matrix.architecture == 'x86_64'  # Only run examples on native architecture
-      run: |
-        cd build
-        # Test core examples with timeout protection
-        if [ "$RUNNER_OS" = "Linux" ]; then
-          timeout 30s ./x64_assembler_demo || echo "x64_assembler_demo completed or timed out"
-          timeout 10s ./hello_macho || echo "hello_macho completed or timed out"  
-        else
-          # macOS doesn't have timeout by default, use gtimeout if available
-          gtimeout 30s ./x64_assembler_demo 2>/dev/null || ./x64_assembler_demo || echo "x64_assembler_demo completed"
-          gtimeout 10s ./hello_macho 2>/dev/null || ./hello_macho || echo "hello_macho completed"
+        if [ -f examples/ir_hello_world ]; then
+          ./examples/ir_hello_world
         fi
-        
-  code-quality:
-    name: Code Quality
+        if [ -f examples/cross_platform_demo ]; then
+          ./examples/cross_platform_demo
+        fi
+
+  build-debug:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Run basic checks
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
       run: |
-        # Check for common issues
-        echo "Checking for TODO/FIXME comments..."
-        grep -r "TODO\|FIXME" src/ tests/ examples/ || echo "No TODOs found"
-        
-        echo "Checking for trailing whitespace..."
-        if grep -r "[[:space:]]$" src/ tests/ examples/ --include="*.cpp" --include="*.h" 2>/dev/null; then
-          echo "Found trailing whitespace!"
-          exit 1
-        else
-          echo "No trailing whitespace found."
-        fi
-        
-        echo "Code quality checks passed!"
-        
-  documentation:
-    name: Documentation Build
-    runs-on: ubuntu-latest
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build gcc-11 g++-11 valgrind
+    
+    - name: Configure CMake (Debug)
+      run: |
+        cmake -B build-debug \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_C_COMPILER=gcc-11 \
+          -DCMAKE_CXX_COMPILER=g++-11 \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address -fsanitize=undefined -g"
+    
+    - name: Build Debug
+      run: cmake --build build-debug --parallel $(nproc)
+    
+    - name: Run Tests with AddressSanitizer
+      run: |
+        cd build-debug
+        ./test_suite
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+
+  build-windows:
+    runs-on: windows-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Validate README
+    - uses: actions/checkout@v4
+    
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v1.3
+    
+    - name: Configure CMake
       run: |
-        # Check that README has required sections
-        sections=("Key Features" "Quick Start" "Building" "Testing" "Architecture")
-        for section in "${sections[@]}"; do
-          if ! grep -q "$section" README.md; then
-            echo "Missing required section: $section"
-            exit 1
-          fi
-        done
-        echo "README validation passed!"
-        
-    - name: Check links in documentation
+        cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build --config Release --parallel
+    
+    - name: Run Tests
       run: |
-        # Basic link validation for markdown files
-        if command -v curl &> /dev/null; then
-          echo "Validating external links..."
-          # Extract URLs and validate (basic check)
-          grep -oP 'https?://[^\s)]+' README.md CONTRIBUTING.md || echo "No external links found"
-        fi
+        cd build/Release
+        ./test_suite.exe

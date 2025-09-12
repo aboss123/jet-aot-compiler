@@ -4,6 +4,8 @@
 #include <chrono>
 #include <future>
 #include <type_traits>
+#include <cstring>  // for strncmp
+#include <cstdio>   // for sscanf, fopen, fgets, fclose
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
